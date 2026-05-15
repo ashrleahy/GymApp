@@ -1,7 +1,6 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
-const GITHUB_RAW = "https://raw.githubusercontent.com/ashrleahy/GymApp/main";
-
+// ─── Exercise database ────────────────────────────────────────────────────────
 const PROGRAMS = {
   push: {
     label: "Heavy Push", color: "#4f9cf9",
@@ -60,55 +59,74 @@ const PROGRAMS = {
 const MACHINES = new Set(["Cable Fly","Machine Bench","Overhead Press – Machine","Lateral Raises – Cable","Cable Push Downs","Lat Pulldown","Machine Row","Machine Biceps","Leg Press Machine","Leg Extension","Seated Hamstring Curls","Seated Calf Raise","Leg Press Plyo"]);
 const isMachine = ex => MACHINES.has(ex);
 
-// ── CSV ───────────────────────────────────────────────────────────────────────
-function parseCSV(text) {
-  const lines = text.trim().split("\n");
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map(h => h.trim());
-  return lines.slice(1).map(line => {
-    const vals = line.split(",").map(v => v.trim());
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
-    return obj;
-  });
-}
+// ─── Storage ──────────────────────────────────────────────────────────────────
+const STORAGE_KEY = "gymtracker_v1";
 
-function sessionToCSV(session) {
-  const header = "date,session,location,exercise,group,set,kg,reps,rpe,notes,is_machine";
-  const rows = [];
-  session.exercises.forEach(ex => {
-    ex.sets.forEach((s, i) => {
-      rows.push([session.date, session.type, session.location, ex.name, ex.group, i+1,
-        s.kg??"", s.reps??"", s.rpe??"", (s.notes||"").replace(/,/g,";"), isMachine(ex.name)
-      ].join(","));
-    });
-  });
-  return header + "\n" + rows.join("\n");
-}
-
-function downloadCSV(session) {
-  const blob = new Blob([sessionToCSV(session)], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = `${session.date}-${session.type}.csv`; a.click();
-  URL.revokeObjectURL(url);
-}
-
-async function fetchHistory() {
+function loadHistory() {
   try {
-    const idxRes = await fetch(`${GITHUB_RAW}/sessions/index.txt?t=${Date.now()}`);
-    if (!idxRes.ok) return [];
-    const filenames = (await idxRes.text()).trim().split("\n").map(f => f.trim()).filter(Boolean);
-    const all = [];
-    await Promise.all(filenames.map(async fname => {
-      const r = await fetch(`${GITHUB_RAW}/sessions/${fname}?t=${Date.now()}`);
-      if (r.ok) all.push(...parseCSV(await r.text()));
-    }));
-    return all.sort((a,b) => a.date.localeCompare(b.date));
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
   } catch { return []; }
 }
 
-// ── Claude API ────────────────────────────────────────────────────────────────
+function saveSession(session) {
+  try {
+    const history = loadHistory();
+    // Remove any existing session for same date+type
+    const filtered = history.filter(s => !(s.date === session.date && s.type === session.type));
+    filtered.push(session);
+    filtered.sort((a,b) => a.date.localeCompare(b.date));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+    return filtered;
+  } catch { return loadHistory(); }
+}
+
+// ─── Derived helpers ──────────────────────────────────────────────────────────
+// Flatten sessions into set rows for AI / history lookups
+function flattenHistory(sessions) {
+  const rows = [];
+  sessions.forEach(s => {
+    s.exercises.forEach(ex => {
+      ex.sets.forEach((set, i) => {
+        if (set.kg || set.reps) {
+          rows.push({
+            date: s.date, session: s.type, location: s.location,
+            exercise: ex.name, group: ex.group, set: i+1,
+            kg: set.kg, reps: set.reps, rpe: set.rpe, notes: set.notes,
+            is_machine: isMachine(ex.name),
+          });
+        }
+      });
+    });
+  });
+  return rows;
+}
+
+// ─── Week helpers (starts Saturday) ──────────────────────────────────────────
+function getWeekBounds() {
+  const now = new Date();
+  const day = now.getDay();
+  const diffToSat = (day + 1) % 7;
+  const sat = new Date(now);
+  sat.setDate(now.getDate() - diffToSat);
+  sat.setHours(0,0,0,0);
+  const fri = new Date(sat);
+  fri.setDate(sat.getDate() + 6);
+  fri.setHours(23,59,59,999);
+  return { start: sat, end: fri };
+}
+
+function getWeekSessions(sessions) {
+  const { start, end } = getWeekBounds();
+  const done = {};
+  sessions.forEach(s => {
+    const d = new Date(s.date + "T00:00:00");
+    if (d >= start && d <= end) done[s.type] = s.date;
+  });
+  return done;
+}
+
+// ─── Claude API ───────────────────────────────────────────────────────────────
 async function callClaude(user, system, maxTokens=400) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -119,11 +137,11 @@ async function callClaude(user, system, maxTokens=400) {
   return d.content?.map(b=>b.text||"").join("") || "";
 }
 
-async function getWeightSuggestion(exercise, history) {
+async function getWeightSuggestion(exercise, rows) {
   if (isMachine(exercise)) return null;
-  const rows = history.filter(r => r.exercise===exercise && r.is_machine!=="true" && r.kg).slice(-20);
-  if (!rows.length) return null;
-  const hist = rows.map(r=>`${r.date}: ${r.kg}kg × ${r.reps} reps, RPE ${r.rpe}`).join("\n");
+  const relevant = rows.filter(r => r.exercise===exercise && !r.is_machine && r.kg).slice(-20);
+  if (!relevant.length) return null;
+  const hist = relevant.map(r=>`${r.date}: ${r.kg}kg × ${r.reps} reps, RPE ${r.rpe||"?"}`).join("\n");
   try {
     const raw = await callClaude(
       `Exercise: ${exercise}\nHistory:\n${hist}\nSuggest today's weight for 2 sets of 5-8 reps.`,
@@ -133,10 +151,10 @@ async function getWeightSuggestion(exercise, history) {
   } catch { return null; }
 }
 
-async function getProgramNudge(history) {
-  if (history.length < 15) return null;
-  const rows = history.filter(r=>r.is_machine!=="true"&&r.kg).slice(-80);
-  const summary = rows.map(r=>`${r.date} [${r.session}] ${r.exercise}: ${r.kg}kg×${r.reps} RPE${r.rpe}`).join("\n");
+async function getProgramNudge(rows) {
+  if (rows.length < 15) return null;
+  const freeRows = rows.filter(r=>!r.is_machine&&r.kg).slice(-80);
+  const summary = freeRows.map(r=>`${r.date} [${r.session}] ${r.exercise}: ${r.kg}kg×${r.reps} RPE${r.rpe||"?"}`).join("\n");
   return callClaude(
     `Training log:\n${summary}`,
     `You are a strength coach. Give 3 short specific observations about progress, recovery, or balance. Plain text, no bullets, 4 sentences max.`,
@@ -144,129 +162,74 @@ async function getProgramNudge(history) {
   );
 }
 
-// ── Week helpers (starts Saturday) ───────────────────────────────────────────
-function getWeekBounds() {
-  const now = new Date();
-  const day = now.getDay(); // 0=Sun,6=Sat
-  const diffToSat = (day + 1) % 7; // days since last Saturday
-  const sat = new Date(now);
-  sat.setDate(now.getDate() - diffToSat);
-  sat.setHours(0,0,0,0);
-  const fri = new Date(sat);
-  fri.setDate(sat.getDate() + 6);
-  fri.setHours(23,59,59,999);
-  return { start: sat, end: fri };
-}
-
-function getWeekSessions(history) {
-  const { start, end } = getWeekBounds();
-  const done = {};
-  history.forEach(r => {
-    const d = new Date(r.date + "T00:00:00");
-    if (d >= start && d <= end) done[r.session] = r.date;
-  });
-  return done;
-}
-
-// ── Styles ────────────────────────────────────────────────────────────────────
+// ─── Styles ───────────────────────────────────────────────────────────────────
 const S = `
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 :root{
   --bg:#0f1117;--s1:#181c27;--s2:#1e2336;--s3:#252b3d;
-  --border:rgba(255,255,255,0.06);--border-md:rgba(255,255,255,0.11);--border-hi:rgba(255,255,255,0.2);
+  --border:rgba(255,255,255,0.06);--border-md:rgba(255,255,255,0.11);--border-hi:rgba(255,255,255,0.22);
   --text:#e8eaf0;--t2:#7b82a0;--t3:#3d4460;
   --blue:#4f9cf9;--orange:#f9a24f;--green:#4fc98a;--purple:#c084fc;--red:#f96b6b;--amber:#f9d44f;
   --r:12px;--rs:8px;
 }
 html,body{height:100%;background:var(--bg);}
 body{font-family:'Inter',sans-serif;color:var(--text);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden;}
-.app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;position:relative;}
-
-/* Nav — fixed bottom on mobile */
+.app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;}
 .nav{display:flex;background:var(--s1);border-top:1px solid var(--border-md);position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;z-index:100;padding-bottom:env(safe-area-inset-bottom);}
 .ntab{flex:1;padding:12px 6px 10px;font-size:9px;font-weight:600;text-align:center;cursor:pointer;border:none;background:none;color:var(--t3);letter-spacing:.08em;text-transform:uppercase;border-top:2px solid transparent;transition:all .15s;}
 .ntab i{display:block;font-size:22px;margin-bottom:2px;}
 .ntab.active{color:var(--text);border-top-color:var(--text);}
-
 .view{padding:16px 14px 90px;flex:1;}
-
-/* Header bar */
 .hbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
 .hbar-title{font-size:18px;font-weight:600;letter-spacing:-.3px;}
-
-/* Section labels */
 .slabel{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--t2);margin:18px 0 8px;}
 .slabel:first-child{margin-top:0;}
-
-/* Cards */
 .card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:14px 15px;margin-bottom:8px;}
 .card-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
 .card-title{font-size:14px;font-weight:500;}
 .card-sub{font-size:12px;color:var(--t2);margin-top:2px;}
-
-/* Badges */
 .badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;letter-spacing:.02em;}
 .b-blue{background:rgba(79,156,249,.15);color:#4f9cf9;}
 .b-green{background:rgba(79,201,138,.15);color:#4fc98a;}
 .b-gray{background:rgba(255,255,255,.07);color:var(--t2);}
-.b-amber{background:rgba(249,212,79,.15);color:#f9d44f;}
-.b-red{background:rgba(249,107,107,.15);color:#f96b6b;}
 .b-purple{background:rgba(192,132,252,.15);color:#c084fc;}
 .b-orange{background:rgba(249,162,79,.15);color:#f9a24f;}
-
-/* Week tracker — 2x2 grid on mobile */
 .week-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;}
-.wcard{border-radius:var(--r);padding:13px 13px 12px;border:1px solid var(--border);cursor:pointer;transition:all .2s;position:relative;overflow:hidden;min-height:80px;}
+.wcard{border-radius:var(--r);padding:13px 13px 12px;border:1px solid var(--border);cursor:pointer;transition:all .2s;position:relative;overflow:hidden;min-height:80px;background:var(--s1);}
 .wcard.done{border-color:transparent;}
-.wcard.todo:hover{border-color:var(--border-md);}
-.wcard .wc-tag{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;gap:4px;}
-.wcard .wc-name{font-size:13px;font-weight:600;line-height:1.3;}
-.wcard .wc-date{font-size:10px;color:var(--t2);margin-top:5px;font-weight:500;}
-.wcard .wc-icon{position:absolute;bottom:9px;right:11px;font-size:18px;opacity:.25;}
+.wc-tag{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;gap:4px;}
+.wc-name{font-size:13px;font-weight:600;line-height:1.3;}
+.wc-date{font-size:10px;color:var(--t2);margin-top:5px;font-weight:500;}
+.wc-icon{position:absolute;bottom:9px;right:11px;font-size:18px;opacity:.25;}
 .week-meta{font-size:11px;color:var(--t2);margin-bottom:18px;font-weight:500;}
 .week-meta strong{color:var(--text);}
-
-/* Location toggle */
 .loctog{display:inline-flex;background:var(--s2);border-radius:var(--rs);padding:3px;gap:2px;}
 .locbtn{padding:6px 14px;font-size:11px;font-weight:600;border:none;background:none;cursor:pointer;color:var(--t2);border-radius:6px;transition:all .15s;letter-spacing:.03em;}
 .locbtn.active{background:var(--s3);color:var(--text);}
-
-/* Exercise picker */
 .pick-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;}
 .pbtn{padding:11px 10px;font-size:12px;font-weight:500;border:1px solid var(--border);border-radius:var(--rs);background:var(--s1);cursor:pointer;text-align:left;color:var(--t2);transition:all .15s;line-height:1.35;}
 .pbtn:hover{border-color:var(--border-md);color:var(--text);}
 .pbtn.sel{border-color:var(--text);background:var(--s3);color:var(--text);}
 .pbtn.mach{border-style:dashed;}
 .pick-count{font-size:11px;font-weight:600;margin-left:6px;}
-
-/* Set logging */
-.sh{display:grid;grid-template-columns:22px 1fr 1fr 1fr 36px;gap:6px;margin-bottom:5px;padding:0 2px;}
+.sh{display:grid;grid-template-columns:22px 1fr 1fr 1fr 28px;gap:6px;margin-bottom:5px;padding:0 2px;}
 .sh span{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);text-align:center;}
-.sr{display:grid;grid-template-columns:22px 1fr 1fr 1fr 36px;gap:6px;align-items:center;margin-bottom:7px;}
+.sr{display:grid;grid-template-columns:22px 1fr 1fr 1fr 28px;gap:6px;align-items:center;margin-bottom:8px;}
 .snum{font-size:11px;font-weight:600;color:var(--t3);text-align:center;}
-.sinput{width:100%;padding:10px 4px;font-size:15px;font-family:'Inter',sans-serif;font-weight:500;text-align:center;border:1px solid var(--border);border-radius:var(--rs);background:var(--s2);color:var(--text);transition:border-color .15s;}
+.sinput{width:100%;padding:10px 4px;font-size:16px;font-family:'Inter',sans-serif;font-weight:500;text-align:center;border:1px solid var(--border);border-radius:var(--rs);background:var(--s2);color:var(--text);transition:all .15s;}
 .sinput:focus{outline:none;border-color:var(--border-hi);background:var(--s3);}
-.sinput.dk{background:var(--s1);color:var(--t2);}
-.chkbtn{width:36px;height:36px;border-radius:50%;border:1px solid var(--border-md);background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:16px;transition:all .15s;flex-shrink:0;}
-.chkbtn.done{background:var(--green);border-color:var(--green);color:#0f1117;}
-
-/* AI boxes */
+.sinput.done{background:rgba(79,201,138,.1);border-color:rgba(79,201,138,.3);color:#4fc98a;}
+.set-done-row{display:flex;align-items:center;justify-content:center;gap:6px;padding:8px;background:rgba(79,201,138,.08);border:1px solid rgba(79,201,138,.2);border-radius:var(--rs);margin-bottom:8px;font-size:12px;font-weight:600;color:#4fc98a;}
 .ai-box{background:rgba(79,201,138,.07);border:1px solid rgba(79,201,138,.18);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px;font-size:12px;color:#a8f0cc;line-height:1.5;}
 .ai-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--green);margin-bottom:5px;display:flex;align-items:center;gap:4px;}
 .ai-nudge{background:rgba(192,132,252,.07);border:1px solid rgba(192,132,252,.18);border-radius:var(--r);padding:14px;font-size:13px;color:#e2c8ff;line-height:1.65;margin-bottom:8px;}
 .ai-nudge .ai-label{color:var(--purple);}
-
-/* Timer */
-.timer-wrap{text-align:right;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.timer-wrap{text-align:right;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;}
 .timer-val{font-size:32px;font-weight:300;letter-spacing:-1px;line-height:1;font-variant-numeric:tabular-nums;}
 .timer-sub{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-top:2px;}
-
-/* History pills */
 .hist-pill{background:var(--s2);border-radius:var(--rs);padding:8px 11px;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;}
 .hist-pill span:last-child{color:var(--text);}
-
-/* Progress */
 .pr-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);}
 .pr-row:last-child{border-bottom:none;}
 .pr-name{font-size:13px;font-weight:500;flex:1;}
@@ -276,15 +239,11 @@ body{font-family:'Inter',sans-serif;color:var(--text);font-size:14px;line-height
 .pbar-top{display:flex;justify-content:space-between;font-size:12px;font-weight:500;margin-bottom:6px;}
 .pbar-bg{height:4px;background:var(--s2);border-radius:99px;overflow:hidden;}
 .pbar-fill{height:100%;border-radius:99px;background:var(--text);transition:width .5s ease;}
-
-/* Stats */
 .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
 .scard{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:13px 14px;}
 .sc-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--t2);margin-bottom:5px;}
 .sc-val{font-size:26px;font-weight:300;color:var(--text);letter-spacing:-.5px;}
 .sc-unit{font-size:12px;color:var(--t2);font-weight:400;}
-
-/* Buttons */
 .btn-p{width:100%;padding:14px;border-radius:var(--rs);background:var(--text);color:var(--bg);border:none;cursor:pointer;font-size:13px;font-weight:600;margin-top:10px;transition:opacity .15s;font-family:'Inter',sans-serif;letter-spacing:.01em;}
 .btn-p:hover{opacity:.88;}
 .btn-p:active{opacity:.75;}
@@ -296,13 +255,9 @@ body{font-family:'Inter',sans-serif;color:var(--text);font-size:14px;line-height
 .npair button{padding:12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--s1);cursor:pointer;font-size:12px;font-weight:500;color:var(--t2);font-family:'Inter',sans-serif;transition:all .15s;}
 .npair button:hover{border-color:var(--border-md);color:var(--text);}
 .npair button:disabled{opacity:.3;cursor:not-allowed;}
-
-/* Step bar */
 .step-bar{display:flex;gap:4px;margin-bottom:16px;}
 .step-pip{flex:1;height:3px;border-radius:99px;background:var(--s3);transition:background .2s;}
 .step-pip.done{background:var(--text);}
-
-/* Misc */
 .sdot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0;}
 .irow{display:flex;align-items:center;justify-content:space-between;}
 textarea{width:100%;padding:10px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--rs);background:var(--s2);color:var(--text);resize:none;height:54px;font-family:'Inter',sans-serif;transition:border-color .15s;line-height:1.4;}
@@ -313,24 +268,21 @@ textarea::placeholder{color:var(--t3);}
 .empty{text-align:center;padding:52px 0;color:var(--t3);font-size:12px;font-weight:500;line-height:2;}
 input[type=number]{-moz-appearance:textfield;}
 input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
-.divider{height:1px;background:var(--border);margin:14px 0;}
 `;
 
-// ── App root ──────────────────────────────────────────────────────────────────
+// ─── App root ─────────────────────────────────────────────────────────────────
 export default function GymTracker() {
   const [tab, setTab]         = useState("plan");
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [sessions, setSessions] = useState(()=>loadHistory());
   const [session, setSession] = useState(null);
   const [nudge, setNudge]     = useState(null);
   const [nudgeLoading, setNudgeLoading] = useState(false);
 
-  useEffect(() => {
-    fetchHistory().then(rows => { setHistory(rows); setLoading(false); });
-  }, []);
+  const flatRows = flattenHistory(sessions);
 
+  // PRs from flat rows
   const prs = {};
-  history.filter(r => r.is_machine!=="true" && r.kg && r.reps).forEach(r => {
+  flatRows.filter(r => !r.is_machine && r.kg && r.reps).forEach(r => {
     const kg=parseFloat(r.kg), reps=parseInt(r.reps);
     if (!isNaN(kg)&&!isNaN(reps)) {
       const c=prs[r.exercise];
@@ -338,11 +290,9 @@ export default function GymTracker() {
     }
   });
 
-  const sessionKeys = [...new Set(history.map(r=>r.date+r.session))];
-  const totalSessions = sessionKeys.length;
-  const weekDone = getWeekSessions(history);
+  const weekDone = getWeekSessions(sessions);
   const thisWeek = Object.keys(weekDone).length;
-  const rpes = history.map(r=>parseFloat(r.rpe)).filter(v=>!isNaN(v));
+  const rpes = flatRows.map(r=>parseFloat(r.rpe)).filter(v=>!isNaN(v));
   const avgRpe = rpes.length ? (rpes.reduce((a,b)=>a+b,0)/rpes.length).toFixed(1) : "—";
 
   function startSession(type, location) {
@@ -351,22 +301,27 @@ export default function GymTracker() {
     prog.groups.forEach(g => {
       const list = location==="gym" ? g.gym : g.home;
       list.slice(0,g.pick).forEach(name => {
-        exercises.push({ name, group:g.name, sets:[{kg:"",reps:"",rpe:"",notes:"",done:false},{kg:"",reps:"",rpe:"",notes:"",done:false}], suggestion:null, suggLoading:false });
+        exercises.push({ name, group:g.name, sets:[{kg:"",reps:"",rpe:"",done:false},{kg:"",reps:"",rpe:"",done:false}], suggestion:null, suggLoading:false });
       });
     });
     setSession({ type, location, date:new Date().toISOString().split("T")[0], exercises, step:"pick", exIdx:0 });
     setTab("log");
   }
 
-  function finishSession() { downloadCSV(session); setSession(null); setTab("plan"); }
+  function finishSession(completedSession) {
+    const updated = saveSession(completedSession);
+    setSessions(updated);
+    setSession(null);
+    setTab("plan");
+  }
 
   return (
     <>
       <style>{S}</style>
       <div className="app">
-        {tab==="plan"     && <PlanView history={history} loading={loading} weekDone={weekDone} onStart={startSession}/>}
-        {tab==="log"      && <LogView session={session} setSession={setSession} history={history} onFinish={finishSession} onStartNew={()=>setTab("plan")}/>}
-        {tab==="progress" && <ProgressView history={history} loading={loading} prs={prs} totalSessions={totalSessions} thisWeek={thisWeek} avgRpe={avgRpe} nudge={nudge} nudgeLoading={nudgeLoading} onNudge={async()=>{setNudgeLoading(true);const n=await getProgramNudge(history);setNudge(n);setNudgeLoading(false);}}/>}
+        {tab==="plan"     && <PlanView sessions={sessions} weekDone={weekDone} onStart={startSession}/>}
+        {tab==="log"      && <LogView session={session} setSession={setSession} flatRows={flatRows} onFinish={finishSession} onStartNew={()=>setTab("plan")}/>}
+        {tab==="progress" && <ProgressView flatRows={flatRows} sessions={sessions} prs={prs} thisWeek={thisWeek} avgRpe={avgRpe} nudge={nudge} nudgeLoading={nudgeLoading} onNudge={async()=>{setNudgeLoading(true);const n=await getProgramNudge(flatRows);setNudge(n);setNudgeLoading(false);}}/>}
         <nav className="nav">
           {[{id:"plan",icon:"ti-calendar",label:"Plan"},{id:"log",icon:"ti-barbell",label:"Log"},{id:"progress",icon:"ti-chart-bar",label:"Progress"}].map(t=>(
             <button key={t.id} className={`ntab ${tab===t.id?"active":""}`} onClick={()=>setTab(t.id)}>
@@ -379,28 +334,25 @@ export default function GymTracker() {
   );
 }
 
-// ── Plan View ─────────────────────────────────────────────────────────────────
-function PlanView({ history, loading, weekDone, onStart }) {
+// ─── Plan View ────────────────────────────────────────────────────────────────
+function PlanView({ sessions, weekDone, onStart }) {
   const [loc, setLoc] = useState("gym");
   const sessionsLeft = Object.keys(PROGRAMS).filter(k => !weekDone[k]);
   const done = Object.keys(weekDone).length;
-
-  function lastDate(type) {
-    const rows = history.filter(r=>r.session===type);
-    return rows.length ? rows[rows.length-1].date : null;
-  }
-
   const { start } = getWeekBounds();
   const weekLabel = start.toLocaleDateString("en-AU", { day:"numeric", month:"short" });
+
+  function lastDate(type) {
+    const s = [...sessions].reverse().find(s=>s.type===type);
+    return s ? s.date : null;
+  }
 
   return (
     <div className="view">
       <div className="hbar">
         <div>
           <div className="hbar-title">This week</div>
-          <div style={{fontSize:11,color:"var(--t2)",fontWeight:500,marginTop:2}}>
-            w/c {weekLabel}
-          </div>
+          <div style={{fontSize:11,color:"var(--t2)",fontWeight:500,marginTop:2}}>w/c {weekLabel}</div>
         </div>
         <div className="loctog">
           <button className={`locbtn ${loc==="gym"?"active":""}`} onClick={()=>setLoc("gym")}>
@@ -417,20 +369,18 @@ function PlanView({ history, loading, weekDone, onStart }) {
           const isDone = !!weekDone[key];
           const last = lastDate(key);
           return (
-            <div key={key} className={`wcard ${isDone?"done":"todo"}`}
-              style={isDone ? {background:`color-mix(in srgb, ${prog.color} 10%, var(--s1))`,borderColor:`color-mix(in srgb, ${prog.color} 30%, transparent)`} : {background:"var(--s1)"}}
+            <div key={key} className={`wcard ${isDone?"done":""}`}
+              style={isDone?{background:`color-mix(in srgb, ${prog.color} 10%, var(--s1))`,borderColor:`color-mix(in srgb, ${prog.color} 30%, transparent)`}:{}}
               onClick={()=>onStart(key,loc)}
             >
               <div className="wc-tag" style={{color:prog.color}}>
                 <i className={`ti ${isDone?"ti-check":"ti-circle"}`} aria-hidden="true" style={{fontSize:10}}/>
-                {isDone ? "done" : "to do"}
+                {isDone?"done":"to do"}
               </div>
               <div className="wc-name">{prog.label}</div>
               {isDone
                 ? <div className="wc-date">{weekDone[key]}</div>
-                : last
-                  ? <div className="wc-date">last: {last}</div>
-                  : <div className="wc-date" style={{color:"var(--t3)"}}>not logged yet</div>
+                : <div className="wc-date" style={{color:last?"var(--t2)":"var(--t3)"}}>{last?`last: ${last}`:"not logged yet"}</div>
               }
               <i className={`ti ${isDone?"ti-check":"ti-chevron-right"} wc-icon`} aria-hidden="true" style={{color:prog.color}}/>
             </div>
@@ -440,14 +390,12 @@ function PlanView({ history, loading, weekDone, onStart }) {
 
       <div className="week-meta">
         <strong>{done}</strong> of 4 done
-        {sessionsLeft.length > 0 && <> · {sessionsLeft.map(k=>PROGRAMS[k].label).join(", ")} to go</>}
+        {sessionsLeft.length>0 && <> · {sessionsLeft.map(k=>PROGRAMS[k].label).join(", ")} to go</>}
       </div>
 
       <p className="slabel">Start a session</p>
       {[...sessionsLeft, ...Object.keys(weekDone)].map(key=>{
-        const prog = PROGRAMS[key];
-        const isDone = !!weekDone[key];
-        const last = lastDate(key);
+        const prog=PROGRAMS[key], isDone=!!weekDone[key], last=lastDate(key);
         return (
           <div key={key} className="card" style={{cursor:"pointer",opacity:isDone?.55:1}} onClick={()=>onStart(key,loc)}>
             <div className="card-row">
@@ -456,40 +404,39 @@ function PlanView({ history, loading, weekDone, onStart }) {
                 <div>
                   <div className="card-title">{prog.label}</div>
                   <div className="card-sub">{prog.groups.map(g=>`${g.pick}× ${g.name}`).join(" · ")}</div>
-                  {last && <div className="card-sub" style={{marginTop:1}}>Last: {last}</div>}
+                  {last&&<div className="card-sub" style={{marginTop:1}}>Last: {last}</div>}
                 </div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-                {isDone && <span className="badge b-green">✓</span>}
+                {isDone&&<span className="badge b-green">✓</span>}
                 <i className="ti ti-chevron-right" aria-hidden="true" style={{color:"var(--t3)",fontSize:16}}/>
               </div>
             </div>
           </div>
         );
       })}
-      {loading && <div className="empty"><span className="spin" style={{display:"block",margin:"0 auto 10px"}}/><br/>Loading from GitHub…</div>}
     </div>
   );
 }
 
-// ── Exercise Picker ───────────────────────────────────────────────────────────
+// ─── Exercise Picker ──────────────────────────────────────────────────────────
 function ExercisePicker({ session, setSession }) {
   const prog = PROGRAMS[session.type];
   const [sel, setSel] = useState(()=>{
     const s={};
     prog.groups.forEach((g,gi)=>{
-      const list = session.location==="gym" ? g.gym : g.home;
-      s[gi] = new Set(list.slice(0,g.pick));
+      const list=session.location==="gym"?g.gym:g.home;
+      s[gi]=new Set(list.slice(0,g.pick));
     });
     return s;
   });
 
-  function toggle(gi, name) {
-    const g = prog.groups[gi];
+  function toggle(gi,name) {
+    const g=prog.groups[gi];
     setSel(prev=>{
       const s=new Set(prev[gi]);
-      if (s.has(name)) { s.delete(name); }
-      else { if(s.size>=g.pick){const f=[...s][0];s.delete(f);} s.add(name); }
+      if(s.has(name)){s.delete(name);}
+      else{if(s.size>=g.pick){const f=[...s][0];s.delete(f);}s.add(name);}
       return {...prev,[gi]:s};
     });
   }
@@ -498,13 +445,13 @@ function ExercisePicker({ session, setSession }) {
     const exercises=[];
     prog.groups.forEach((g,gi)=>{
       [...sel[gi]].forEach(name=>{
-        exercises.push({name,group:g.name,sets:[{kg:"",reps:"",rpe:"",notes:"",done:false},{kg:"",reps:"",rpe:"",notes:"",done:false}],suggestion:null,suggLoading:false});
+        exercises.push({name,group:g.name,sets:[{kg:"",reps:"",rpe:"",done:false},{kg:"",reps:"",rpe:"",done:false}],suggestion:null,suggLoading:false});
       });
     });
     setSession(s=>({...s,exercises,step:"log",exIdx:0}));
   }
 
-  const allValid = prog.groups.every((g,gi)=>sel[gi].size===g.pick);
+  const allValid=prog.groups.every((g,gi)=>sel[gi].size===g.pick);
 
   return (
     <div className="view">
@@ -520,14 +467,11 @@ function ExercisePicker({ session, setSession }) {
       </div>
 
       {prog.groups.map((g,gi)=>{
-        const list = session.location==="gym" ? g.gym : g.home;
-        const picked = sel[gi].size;
+        const list=session.location==="gym"?g.gym:g.home;
+        const picked=sel[gi].size;
         return (
           <div key={gi} style={{marginBottom:16}}>
-            <p className="slabel">
-              {g.name}
-              <span className="pick-count" style={{color:picked===g.pick?"var(--green)":"var(--t2)"}}>{picked}/{g.pick}</span>
-            </p>
+            <p className="slabel">{g.name}<span className="pick-count" style={{color:picked===g.pick?"var(--green)":"var(--t2)"}}>{picked}/{g.pick}</span></p>
             <div className="pick-grid">
               {list.map(name=>(
                 <button key={name} className={`pbtn ${isMachine(name)?"mach":""} ${sel[gi].has(name)?"sel":""}`} onClick={()=>toggle(gi,name)}>
@@ -539,16 +483,13 @@ function ExercisePicker({ session, setSession }) {
           </div>
         );
       })}
-
-      <button className="btn-p" disabled={!allValid} onClick={confirm}>
-        Start logging →
-      </button>
+      <button className="btn-p" disabled={!allValid} onClick={confirm}>Start logging →</button>
     </div>
   );
 }
 
-// ── Log View ──────────────────────────────────────────────────────────────────
-function LogView({ session, setSession, history, onFinish, onStartNew }) {
+// ─── Log View ─────────────────────────────────────────────────────────────────
+function LogView({ session, setSession, flatRows, onFinish, onStartNew }) {
   const [timerSecs, setTimerSecs] = useState(120);
   const [timerOn, setTimerOn]     = useState(false);
   const ref = useRef(null);
@@ -563,16 +504,16 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
     return ()=>clearInterval(ref.current);
   },[timerOn]);
 
-  const idx = session?.exIdx ?? 0;
-  const ex  = session?.exercises?.[idx] ?? null;
+  const idx = session?.exIdx??0;
+  const ex  = session?.exercises?.[idx]??null;
 
   useEffect(()=>{
     if(!ex||isMachine(ex.name)||ex.suggestion||ex.suggLoading) return;
     setSession(s=>({...s,exercises:s.exercises.map((e,i)=>i!==idx?e:{...e,suggLoading:true})}));
-    getWeightSuggestion(ex.name,history).then(sugg=>{
+    getWeightSuggestion(ex.name,flatRows).then(sugg=>{
       setSession(s=>({...s,exercises:s.exercises.map((e,i)=>i!==idx?e:{...e,suggestion:sugg,suggLoading:false})}));
     });
-  },[idx, session?.step]);
+  },[idx,session?.step]);
 
   function startTimer(){ setTimerSecs(120); setTimerOn(true); }
 
@@ -589,40 +530,48 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
   if(session.step==="done") return (
     <div className="view" style={{textAlign:"center",paddingTop:50}}>
       <i className="ti ti-trophy" aria-hidden="true" style={{fontSize:56,color:"var(--green)",display:"block",marginBottom:16}}/>
-      <div style={{fontSize:20,fontWeight:600,marginBottom:6}}>Session done</div>
+      <div style={{fontSize:20,fontWeight:600,marginBottom:6}}>Session saved</div>
       <div style={{fontSize:13,color:"var(--t2)",marginBottom:28,fontWeight:500}}>{session.exercises.length} exercises · {session.date}</div>
       <div className="card" style={{textAlign:"left",marginBottom:14}}>
-        {session.exercises.map((ex,i)=>(
-          <div key={i} className="pr-row">
-            <div style={{flex:1}}>
-              <div style={{fontSize:13,fontWeight:500}}>{ex.name}</div>
-              <div style={{fontSize:11,color:"var(--t2)"}}>{ex.group}</div>
+        {session.exercises.map((ex,i)=>{
+          const doneSets = ex.sets.filter(s=>s.done||s.kg);
+          return (
+            <div key={i} className="pr-row">
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,fontWeight:500}}>{ex.name}</div>
+                <div style={{fontSize:11,color:"var(--t2)"}}>{ex.group}</div>
+              </div>
+              <div style={{fontSize:12,fontWeight:600,color:"var(--t2)"}}>
+                {doneSets.length} sets · {[...new Set(doneSets.filter(s=>s.kg).map(s=>s.kg))].join("/")||"—"} kg
+              </div>
             </div>
-            <div style={{fontSize:12,fontWeight:600,color:"var(--t2)"}}>
-              {ex.sets.filter(s=>s.done).length} sets · {[...new Set(ex.sets.filter(s=>s.kg).map(s=>s.kg))].join("/")} kg
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      <button className="btn-p" onClick={onFinish} style={{background:"var(--blue)",maxWidth:320,margin:"0 auto"}}>
-        <i className="ti ti-download" aria-hidden="true" style={{marginRight:6}}/>Download CSV & finish
+      <button className="btn-p" onClick={()=>onFinish(session)} style={{background:"var(--green)",color:"#0f1117",maxWidth:280,margin:"0 auto"}}>
+        <i className="ti ti-check" aria-hidden="true" style={{marginRight:6}}/>Save & finish
       </button>
-      <div style={{fontSize:11,color:"var(--t3)",marginTop:12,fontWeight:500}}>
-        Push to sessions/ in your GitHub repo
-      </div>
     </div>
   );
 
-  const total = session.exercises.length;
+  const total=session.exercises.length;
   const mins=Math.floor(timerSecs/60), secs=timerSecs%60;
+  const prog=PROGRAMS[session.type];
 
   function updateSet(si,field,val){
-    setSession(s=>({...s,exercises:s.exercises.map((e,ei)=>ei!==idx?e:{...e,sets:e.sets.map((st,sii)=>sii!==si?st:{...st,[field]:val})})}));
+    setSession(s=>({...s,exercises:s.exercises.map((e,ei)=>ei!==idx?e:{...e,sets:e.sets.map((st,sii)=>{
+      if(sii!==si) return st;
+      const updated={...st,[field]:val};
+      // auto-mark done when both kg and reps are filled
+      if(updated.kg&&updated.reps) updated.done=true;
+      return updated;
+    })})}));
+    // start rest timer when reps entered (set completing)
+    if(field==="reps"&&val) startTimer();
   }
-  function toggleDone(si){ updateSet(si,"done",!ex.sets[si].done); if(!ex.sets[si].done) startTimer(); }
 
-  const exHistory = history.filter(r=>r.exercise===ex.name&&r.kg).slice(-5).reverse();
-  const prog = PROGRAMS[session.type];
+  const exHistory=flatRows.filter(r=>r.exercise===ex.name&&r.kg).slice(-5).reverse();
+  const allSetsDone=ex.sets.every(s=>s.done||s.kg);
 
   return (
     <div className="view">
@@ -648,12 +597,10 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
 
       {!isMachine(ex.name)&&(
         <div className="ai-box">
-          <div className="ai-label">
-            <i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:11}}/>AI suggestion
-          </div>
-          {ex.suggLoading ? <span><span className="spin" style={{marginRight:6}}/>Calculating…</span>
-           : ex.suggestion ? <span><strong>{ex.suggestion.kg} kg × {ex.suggestion.reps}</strong>{ex.suggestion.rationale?" — "+ex.suggestion.rationale:""}</span>
-           : <span style={{color:"rgba(168,240,204,.5)"}}>No history yet — log your starting weight.</span>}
+          <div className="ai-label"><i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:11}}/>AI suggestion</div>
+          {ex.suggLoading?<span><span className="spin" style={{marginRight:6}}/>Calculating…</span>
+           :ex.suggestion?<span><strong>{ex.suggestion.kg} kg × {ex.suggestion.reps}</strong>{ex.suggestion.rationale?" — "+ex.suggestion.rationale:""}</span>
+           :<span style={{color:"rgba(168,240,204,.4)"}}>No history yet — log your starting weight.</span>}
         </div>
       )}
 
@@ -663,23 +610,23 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
           {exHistory.map((r,i)=>(
             <div key={i} className="hist-pill">
               <span>{r.date}</span>
-              <span>{r.kg}kg × {r.reps} <span style={{color:"var(--t3)",marginLeft:4}}>RPE {r.rpe}</span></span>
+              <span>{r.kg}kg × {r.reps} <span style={{color:"var(--t3)",marginLeft:4}}>RPE {r.rpe||"—"}</span></span>
             </div>
           ))}
           <div style={{marginBottom:14}}/>
         </>
       )}
 
-      <div className="sh"><span/><span>kg</span><span>reps</span><span>rpe</span><span/></div>
+      <div className="sh"><span/><span>kg</span><span>reps</span><span>rpe</span><span style={{width:28}}/></div>
       {ex.sets.map((st,si)=>(
         <div key={si} className="sr">
           <span className="snum">{si+1}</span>
-          <input className={`sinput ${st.done?"dk":""}`} type="number" inputMode="decimal" step="2.5" value={st.kg} placeholder="—" onChange={e=>updateSet(si,"kg",e.target.value)}/>
-          <input className={`sinput ${st.done?"dk":""}`} type="number" inputMode="numeric" min="1" max="20" value={st.reps} placeholder="—" onChange={e=>updateSet(si,"reps",e.target.value)}/>
-          <input className={`sinput ${st.done?"dk":""}`} type="number" inputMode="numeric" min="5" max="10" value={st.rpe} placeholder="—" onChange={e=>updateSet(si,"rpe",e.target.value)}/>
-          <button className={`chkbtn ${st.done?"done":""}`} onClick={()=>toggleDone(si)} aria-label="Mark set done">
-            <i className="ti ti-check" aria-hidden="true"/>
-          </button>
+          <input className={`sinput ${st.done?"done":""}`} type="number" inputMode="decimal" step="2.5" value={st.kg} placeholder="—" onChange={e=>updateSet(si,"kg",e.target.value)}/>
+          <input className={`sinput ${st.done?"done":""}`} type="number" inputMode="numeric" min="1" max="20" value={st.reps} placeholder="—" onChange={e=>updateSet(si,"reps",e.target.value)}/>
+          <input className={`sinput ${st.done?"done":""}`} type="number" inputMode="numeric" min="1" max="10" value={st.rpe} placeholder="—" onChange={e=>updateSet(si,"rpe",e.target.value)}/>
+          <div style={{width:28,display:"flex",alignItems:"center",justifyContent:"center"}}>
+            {st.done&&<i className="ti ti-check" aria-hidden="true" style={{fontSize:16,color:"var(--green)"}}/>}
+          </div>
         </div>
       ))}
 
@@ -690,32 +637,35 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
           {idx>0?"← "+session.exercises[idx-1].name:"←"}
         </button>
         {idx<total-1
-          ? <button style={{fontWeight:600,color:"var(--text)"}} onClick={()=>setSession(s=>({...s,exIdx:idx+1}))}>{session.exercises[idx+1].name} →</button>
-          : <button style={{fontWeight:600,color:"var(--green)"}} onClick={()=>setSession(s=>({...s,step:"done"}))}>Finish →</button>
+          ?<button style={{fontWeight:600,color:"var(--text)"}} onClick={()=>setSession(s=>({...s,exIdx:idx+1}))}>{session.exercises[idx+1].name} →</button>
+          :<button style={{fontWeight:600,color:"var(--green)"}} onClick={()=>setSession(s=>({...s,step:"done"}))}>Finish →</button>
         }
       </div>
     </div>
   );
 }
 
-// ── Progress View ─────────────────────────────────────────────────────────────
-function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, nudge, nudgeLoading, onNudge }) {
-  const freePRs = Object.entries(prs).filter(([n])=>!isMachine(n)).sort((a,b)=>b[1].date.localeCompare(a[1].date)).slice(0,8);
-  const sessionKeys=[...new Set(history.map(r=>r.date+r.session))];
+// ─── Progress View ────────────────────────────────────────────────────────────
+function ProgressView({ flatRows, sessions, prs, thisWeek, avgRpe, nudge, nudgeLoading, onNudge }) {
+  const freePRs=Object.entries(prs).filter(([n])=>!isMachine(n)).sort((a,b)=>b[1].date.localeCompare(a[1].date)).slice(0,8);
+  const sessionKeys=[...new Set(flatRows.map(r=>r.date+r.session))];
   const recent4=sessionKeys.slice(-4), prev4=sessionKeys.slice(-8,-4);
 
-  function vol(keys,ex){ return history.filter(r=>keys.includes(r.date+r.session)&&r.exercise===ex&&r.kg).reduce((s,r)=>s+(parseFloat(r.kg)*(parseInt(r.reps)||0)),0); }
+  function vol(keys,ex){ return flatRows.filter(r=>keys.includes(r.date+r.session)&&r.exercise===ex&&r.kg).reduce((s,r)=>s+(parseFloat(r.kg)*(parseInt(r.reps)||0)),0); }
   const keyLifts=["Bench – Bar","Bench – Dumbbells","Squats","Deadlifts","Overhead Press – Bar","Pull Ups","Barbell Row"];
-  const liftsWithData=keyLifts.filter(l=>history.some(r=>r.exercise===l&&r.kg));
+  const liftsWithData=keyLifts.filter(l=>flatRows.some(r=>r.exercise===l&&r.kg));
 
   return (
     <div className="view">
-      <div className="hbar">
-        <div className="hbar-title">Progress</div>
-      </div>
+      <div className="hbar"><div className="hbar-title">Progress</div></div>
 
       <div className="stat-grid">
-        {[{label:"Total sessions",val:totalSessions,unit:""},{label:"This week",val:thisWeek,unit:" /4"},{label:"PRs tracked",val:Object.keys(prs).length,unit:""},{label:"Avg RPE",val:avgRpe,unit:""}].map(s=>(
+        {[
+          {label:"Total sessions",val:sessions.length,unit:""},
+          {label:"This week",val:thisWeek,unit:" /4"},
+          {label:"PRs tracked",val:Object.keys(prs).length,unit:""},
+          {label:"Avg RPE",val:avgRpe,unit:""},
+        ].map(s=>(
           <div key={s.label} className="scard">
             <div className="sc-label">{s.label}</div>
             <div className="sc-val">{s.val}<span className="sc-unit">{s.unit}</span></div>
@@ -725,12 +675,12 @@ function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, 
 
       <p className="slabel">AI programme review</p>
       {nudge
-        ? <div className="ai-nudge"><div className="ai-label"><i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:11}}/>Coach feedback</div>{nudge}</div>
-        : <button className="btn-g" onClick={onNudge} disabled={nudgeLoading||history.length<15}>
-            {nudgeLoading?<><span className="spin" style={{marginRight:6}}/>Analysing your training…</>
-             :history.length<15?"Log more sessions to unlock AI review"
-             :<><i className="ti ti-sparkles" aria-hidden="true" style={{marginRight:6}}/>Get AI programme feedback ↗</>}
-          </button>
+        ?<div className="ai-nudge"><div className="ai-label"><i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:11}}/>Coach feedback</div>{nudge}</div>
+        :<button className="btn-g" onClick={onNudge} disabled={nudgeLoading||flatRows.length<15}>
+          {nudgeLoading?<><span className="spin" style={{marginRight:6}}/>Analysing…</>
+           :flatRows.length<15?"Log more sessions to unlock AI review"
+           :<><i className="ti ti-sparkles" aria-hidden="true" style={{marginRight:6}}/>Get AI programme feedback ↗</>}
+         </button>
       }
 
       {freePRs.length>0&&(
@@ -769,10 +719,9 @@ function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, 
         </>
       )}
 
-      {!loading&&history.length===0&&(
-        <div className="empty">No session data yet.<br/>Log a session and push the CSV<br/>to sessions/ in your GitHub repo.</div>
+      {sessions.length===0&&(
+        <div className="empty">No sessions yet.<br/>Log your first session to get started.</div>
       )}
-      {loading&&<div className="empty"><span className="spin" style={{display:"block",margin:"0 auto 10px"}}/><br/>Loading from GitHub…</div>}
     </div>
   );
 }
