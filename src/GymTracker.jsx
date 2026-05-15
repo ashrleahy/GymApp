@@ -5,13 +5,13 @@ const GITHUB_API = "https://api.github.com/repos/ashrleahy/GymApp";
 
 const PROGRAMS = {
   push: {
-    label: "Heavy Push", color: "#e8714a",
+    label: "Heavy Push", color: "#4f9cf9",
     groups: [
       { name: "Chest", pick: 2,
         gym:  ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Cable Fly","Machine Bench","Push Ups"],
         home: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Push Ups"] },
       { name: "Shoulders", pick: 2,
-        gym:  ["Overhead Press – Bar","Overhead Press – Dumbbells","Lateral Raises – Cable","Lateral Raises – Dumbbells"],
+        gym:  ["Overhead Press – Bar","Overhead Press – Dumbbells","Overhead Press – Machine","Lateral Raises – Cable","Lateral Raises – Dumbbells"],
         home: ["Overhead Press – Bar","Overhead Press – Dumbbells","Lateral Raises – Dumbbells"] },
       { name: "Tris", pick: 2,
         gym:  ["Dips","Cable Push Downs","Overhead Extensions"],
@@ -19,7 +19,7 @@ const PROGRAMS = {
     ],
   },
   pull: {
-    label: "Heavy Pull", color: "#5b9cf6",
+    label: "Heavy Pull", color: "#f9a24f",
     groups: [
       { name: "Vertical Pull", pick: 2,
         gym:  ["Pull Ups","Chin Ups","Lat Pulldown"],
@@ -33,7 +33,7 @@ const PROGRAMS = {
     ],
   },
   legs: {
-    label: "Legs", color: "#4ec99a",
+    label: "Legs", color: "#4fc98a",
     groups: [
       { name: "Quad / Compound", pick: 2,
         gym:  ["Squats","Leg Press Machine","Leg Extension","Plyo Jumps","Leg Press Plyo"],
@@ -47,18 +47,18 @@ const PROGRAMS = {
     ],
   },
   upper: {
-    label: "Upper Consolidation", color: "#b07ef8",
+    label: "Upper", color: "#c084fc",
     groups: [
-      { name: "Chest",    pick: 1, gym: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Machine Bench","Push Ups"], home: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Push Ups"] },
-      { name: "Shoulders",pick: 1, gym: ["Overhead Press – Bar","Overhead Press – Dumbbells","Lateral Raises – Dumbbells"], home: ["Overhead Press – Dumbbells","Lateral Raises – Dumbbells"] },
-      { name: "Tris",     pick: 1, gym: ["Dips","Cable Push Downs","Overhead Extensions"],             home: ["Dips","Overhead Extensions"] },
-      { name: "Back",     pick: 1, gym: ["Pull Ups","Chin Ups","Lat Pulldown","Barbell Row"],          home: ["Pull Ups","Chin Ups","Barbell Row"] },
-      { name: "Biceps",   pick: 1, gym: ["Dumbbell Biceps","Barbell Biceps"],                          home: ["Dumbbell Biceps","Barbell Biceps"] },
+      { name: "Chest",     pick: 1, gym: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Machine Bench","Push Ups"], home: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Push Ups"] },
+      { name: "Shoulders", pick: 1, gym: ["Overhead Press – Bar","Overhead Press – Dumbbells","Overhead Press – Machine","Lateral Raises – Dumbbells"], home: ["Overhead Press – Bar","Overhead Press – Dumbbells","Lateral Raises – Dumbbells"] },
+      { name: "Tris",      pick: 1, gym: ["Dips","Cable Push Downs","Overhead Extensions"], home: ["Dips","Overhead Extensions"] },
+      { name: "Back",      pick: 1, gym: ["Pull Ups","Chin Ups","Lat Pulldown","Barbell Row"], home: ["Pull Ups","Chin Ups","Barbell Row"] },
+      { name: "Biceps",    pick: 1, gym: ["Dumbbell Biceps","Barbell Biceps"], home: ["Dumbbell Biceps","Barbell Biceps"] },
     ],
   },
 };
 
-const MACHINES = new Set(["Cable Fly","Machine Bench","Lateral Raises – Cable","Cable Push Downs","Lat Pulldown","Machine Row","Machine Biceps","Leg Press Machine","Leg Extension","Seated Hamstring Curls","Seated Calf Raise","Leg Press Plyo"]);
+const MACHINES = new Set(["Cable Fly","Machine Bench","Overhead Press – Machine","Lateral Raises – Cable","Cable Push Downs","Lat Pulldown","Machine Row","Machine Biceps","Leg Press Machine","Leg Extension","Seated Hamstring Curls","Seated Calf Raise","Leg Press Plyo"]);
 const isMachine = ex => MACHINES.has(ex);
 
 // ── CSV ───────────────────────────────────────────────────────────────────────
@@ -128,7 +128,7 @@ async function getWeightSuggestion(exercise, history) {
   const hist = rows.map(r=>`${r.date}: ${r.kg}kg × ${r.reps} reps, RPE ${r.rpe}`).join("\n");
   try {
     const raw = await callClaude(
-      `Exercise: ${exercise}\nHistory (oldest first):\n${hist}\nSuggest today's weight for 2 sets of 5-8 reps.`,
+      `Exercise: ${exercise}\nHistory:\n${hist}\nSuggest today's weight for 2 sets of 5-8 reps.`,
       `You are a strength coach. Respond ONLY with valid JSON, no markdown: {"kg": number, "reps": "5-8", "rationale": "one sentence max 12 words"}`
     );
     return JSON.parse(raw.replace(/```json|```/g,"").trim());
@@ -141,157 +141,181 @@ async function getProgramNudge(history) {
   const summary = rows.map(r=>`${r.date} [${r.session}] ${r.exercise}: ${r.kg}kg×${r.reps} RPE${r.rpe}`).join("\n");
   return callClaude(
     `Training log:\n${summary}`,
-    `You are a strength coach reviewing a training log. Give 3 short specific observations about progress, recovery signals, or balance. Plain text, no bullets or markdown, 4 sentences max.`,
+    `You are a strength coach. Give 3 short specific observations about progress, recovery, or balance. Plain text, no bullets, 4 sentences max.`,
     500
   );
 }
 
-// ── Week helpers ──────────────────────────────────────────────────────────────
+// ── Week helpers (starts Saturday) ───────────────────────────────────────────
 function getWeekBounds() {
   const now = new Date();
-  const day = now.getDay(); // 0=Sun
-  const mon = new Date(now); mon.setDate(now.getDate() - ((day+6)%7)); mon.setHours(0,0,0,0);
-  const sun = new Date(mon); sun.setDate(mon.getDate()+6); sun.setHours(23,59,59,999);
-  return { mon, sun };
+  const day = now.getDay(); // 0=Sun,6=Sat
+  const diffToSat = (day + 1) % 7; // days since last Saturday
+  const sat = new Date(now);
+  sat.setDate(now.getDate() - diffToSat);
+  sat.setHours(0,0,0,0);
+  const fri = new Date(sat);
+  fri.setDate(sat.getDate() + 6);
+  fri.setHours(23,59,59,999);
+  return { start: sat, end: fri };
 }
 
 function getWeekSessions(history) {
-  const { mon, sun } = getWeekBounds();
+  const { start, end } = getWeekBounds();
   const done = {};
   history.forEach(r => {
-    const d = new Date(r.date);
-    if (d >= mon && d <= sun) done[r.session] = r.date;
+    const d = new Date(r.date + "T00:00:00");
+    if (d >= start && d <= end) done[r.session] = r.date;
   });
-  return done; // { push: "2026-05-13", ... }
+  return done;
 }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 const S = `
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 :root{
-  --bg:#111110;--surface:#1c1c1a;--surface2:#242422;--border:rgba(255,255,255,0.07);--border-md:rgba(255,255,255,0.13);--border-hi:rgba(255,255,255,0.22);
-  --text:#f0efe8;--t2:#8a8a82;--t3:#4a4a44;
-  --push:#e8714a;--pull:#5b9cf6;--legs:#4ec99a;--upper:#b07ef8;
-  --green:#4ec99a;--red:#e8714a;--blue:#5b9cf6;--amber:#f0b955;
-  --r:10px;--rs:6px;--mono:'DM Mono',monospace;--sans:'DM Sans',sans-serif;
+  --bg:#0f1117;--s1:#181c27;--s2:#1e2336;--s3:#252b3d;
+  --border:rgba(255,255,255,0.06);--border-md:rgba(255,255,255,0.11);--border-hi:rgba(255,255,255,0.2);
+  --text:#e8eaf0;--t2:#7b82a0;--t3:#3d4460;
+  --blue:#4f9cf9;--orange:#f9a24f;--green:#4fc98a;--purple:#c084fc;--red:#f96b6b;--amber:#f9d44f;
+  --r:12px;--rs:8px;
 }
-body{font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;}
-.app{max-width:680px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;}
+html,body{height:100%;background:var(--bg);}
+body{font-family:'Inter',sans-serif;color:var(--text);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden;}
+.app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column;position:relative;}
 
-.nav{display:flex;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:0;z-index:10;}
-.ntab{flex:1;padding:13px 8px 11px;font-size:10px;font-weight:500;text-align:center;cursor:pointer;border:none;background:none;color:var(--t3);letter-spacing:.05em;text-transform:uppercase;border-bottom:2px solid transparent;transition:all .15s;font-family:var(--mono);}
-.ntab i{display:block;font-size:18px;margin-bottom:3px;}
-.ntab.active{color:var(--text);border-bottom-color:var(--text);}
+/* Nav — fixed bottom on mobile */
+.nav{display:flex;background:var(--s1);border-top:1px solid var(--border-md);position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;z-index:100;padding-bottom:env(safe-area-inset-bottom);}
+.ntab{flex:1;padding:12px 6px 10px;font-size:9px;font-weight:600;text-align:center;cursor:pointer;border:none;background:none;color:var(--t3);letter-spacing:.08em;text-transform:uppercase;border-top:2px solid transparent;transition:all .15s;}
+.ntab i{display:block;font-size:22px;margin-bottom:2px;}
+.ntab.active{color:var(--text);border-top-color:var(--text);}
 
-.view{padding:18px 16px 80px;flex:1;}
-.slabel{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--t3);margin:20px 0 8px;}
+.view{padding:16px 14px 90px;flex:1;}
+
+/* Header bar */
+.hbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+.hbar-title{font-size:18px;font-weight:600;letter-spacing:-.3px;}
+
+/* Section labels */
+.slabel{font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--t2);margin:18px 0 8px;}
 .slabel:first-child{margin-top:0;}
 
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:13px 15px;margin-bottom:7px;}
-.crow{display:flex;align-items:center;justify-content:space-between;gap:10px;}
-.ctitle{font-size:14px;font-weight:500;color:var(--text);}
-.csub{font-size:12px;color:var(--t2);margin-top:2px;}
+/* Cards */
+.card{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:14px 15px;margin-bottom:8px;}
+.card-row{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.card-title{font-size:14px;font-weight:500;}
+.card-sub{font-size:12px;color:var(--t2);margin-top:2px;}
 
-.badge{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 8px;border-radius:99px;white-space:nowrap;}
-.b-blue{background:rgba(91,156,246,.15);color:#5b9cf6;}
-.b-green{background:rgba(78,201,154,.15);color:#4ec99a;}
+/* Badges */
+.badge{display:inline-block;font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;letter-spacing:.02em;}
+.b-blue{background:rgba(79,156,249,.15);color:#4f9cf9;}
+.b-green{background:rgba(79,201,138,.15);color:#4fc98a;}
 .b-gray{background:rgba(255,255,255,.07);color:var(--t2);}
-.b-amber{background:rgba(240,185,85,.15);color:#f0b955;}
-.b-red{background:rgba(232,113,74,.15);color:#e8714a;}
+.b-amber{background:rgba(249,212,79,.15);color:#f9d44f;}
+.b-red{background:rgba(249,107,107,.15);color:#f96b6b;}
+.b-purple{background:rgba(192,132,252,.15);color:#c084fc;}
+.b-orange{background:rgba(249,162,79,.15);color:#f9a24f;}
 
-/* Week tracker */
-.week-track{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:4px;}
-.wt-card{border-radius:var(--r);padding:12px;border:1px solid var(--border);cursor:pointer;transition:all .2s;position:relative;overflow:hidden;}
-.wt-card.done{border-color:transparent;}
-.wt-card.todo{background:var(--surface);border-color:var(--border);}
-.wt-card.todo:hover{border-color:var(--border-md);}
-.wt-card .wt-label{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px;}
-.wt-card .wt-name{font-size:12px;font-weight:500;color:var(--text);line-height:1.3;}
-.wt-card .wt-date{font-family:var(--mono);font-size:10px;color:var(--t2);margin-top:4px;}
-.wt-card .wt-icon{font-size:20px;position:absolute;bottom:8px;right:10px;opacity:.3;}
-.week-summary{font-family:var(--mono);font-size:11px;color:var(--t2);margin-bottom:18px;}
-.week-summary span{color:var(--text);font-weight:500;}
+/* Week tracker — 2x2 grid on mobile */
+.week-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:6px;}
+.wcard{border-radius:var(--r);padding:13px 13px 12px;border:1px solid var(--border);cursor:pointer;transition:all .2s;position:relative;overflow:hidden;min-height:80px;}
+.wcard.done{border-color:transparent;}
+.wcard.todo:hover{border-color:var(--border-md);}
+.wcard .wc-tag{font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px;display:flex;align-items:center;gap:4px;}
+.wcard .wc-name{font-size:13px;font-weight:600;line-height:1.3;}
+.wcard .wc-date{font-size:10px;color:var(--t2);margin-top:5px;font-weight:500;}
+.wcard .wc-icon{position:absolute;bottom:9px;right:11px;font-size:18px;opacity:.25;}
+.week-meta{font-size:11px;color:var(--t2);margin-bottom:18px;font-weight:500;}
+.week-meta strong{color:var(--text);}
 
 /* Location toggle */
-.loctog{display:inline-flex;border:1px solid var(--border-md);border-radius:var(--rs);overflow:hidden;}
-.locbtn{padding:7px 15px;font-size:12px;font-weight:500;border:none;background:none;cursor:pointer;color:var(--t2);transition:all .15s;font-family:var(--sans);}
-.locbtn.active{background:var(--text);color:var(--bg);}
+.loctog{display:inline-flex;background:var(--s2);border-radius:var(--rs);padding:3px;gap:2px;}
+.locbtn{padding:6px 14px;font-size:11px;font-weight:600;border:none;background:none;cursor:pointer;color:var(--t2);border-radius:6px;transition:all .15s;letter-spacing:.03em;}
+.locbtn.active{background:var(--s3);color:var(--text);}
 
 /* Exercise picker */
-.pick-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:10px;}
-.pbtn{padding:10px 11px;font-size:12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--surface);cursor:pointer;text-align:left;color:var(--t2);transition:all .15s;font-family:var(--sans);line-height:1.3;}
+.pick-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:12px;}
+.pbtn{padding:11px 10px;font-size:12px;font-weight:500;border:1px solid var(--border);border-radius:var(--rs);background:var(--s1);cursor:pointer;text-align:left;color:var(--t2);transition:all .15s;line-height:1.35;}
 .pbtn:hover{border-color:var(--border-md);color:var(--text);}
-.pbtn.sel{border-color:var(--text);background:var(--text);color:var(--bg);}
+.pbtn.sel{border-color:var(--text);background:var(--s3);color:var(--text);}
 .pbtn.mach{border-style:dashed;}
+.pick-count{font-size:11px;font-weight:600;margin-left:6px;}
 
 /* Set logging */
-.sh{display:grid;grid-template-columns:20px 1fr 1fr 1fr 32px;gap:6px;margin-bottom:4px;}
-.sh span{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:var(--t3);text-align:center;}
-.sr{display:grid;grid-template-columns:20px 1fr 1fr 1fr 32px;gap:6px;align-items:center;margin-bottom:6px;}
-.snum{font-family:var(--mono);font-size:11px;color:var(--t3);text-align:center;}
-.sinput{width:100%;padding:8px 3px;font-size:14px;font-family:var(--mono);text-align:center;border:1px solid var(--border);border-radius:var(--rs);background:var(--surface2);color:var(--text);transition:border-color .15s;}
-.sinput:focus{outline:none;border-color:var(--border-hi);}
-.sinput.dk{background:var(--surface);color:var(--t2);}
-.chkbtn{width:32px;height:32px;border-radius:50%;border:1px solid var(--border-md);background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:14px;transition:all .15s;}
-.chkbtn.done{background:var(--green);border-color:var(--green);color:var(--bg);}
+.sh{display:grid;grid-template-columns:22px 1fr 1fr 1fr 36px;gap:6px;margin-bottom:5px;padding:0 2px;}
+.sh span{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);text-align:center;}
+.sr{display:grid;grid-template-columns:22px 1fr 1fr 1fr 36px;gap:6px;align-items:center;margin-bottom:7px;}
+.snum{font-size:11px;font-weight:600;color:var(--t3);text-align:center;}
+.sinput{width:100%;padding:10px 4px;font-size:15px;font-family:'Inter',sans-serif;font-weight:500;text-align:center;border:1px solid var(--border);border-radius:var(--rs);background:var(--s2);color:var(--text);transition:border-color .15s;}
+.sinput:focus{outline:none;border-color:var(--border-hi);background:var(--s3);}
+.sinput.dk{background:var(--s1);color:var(--t2);}
+.chkbtn{width:36px;height:36px;border-radius:50%;border:1px solid var(--border-md);background:none;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--t3);font-size:16px;transition:all .15s;flex-shrink:0;}
+.chkbtn.done{background:var(--green);border-color:var(--green);color:#0f1117;}
 
 /* AI boxes */
-.ai-box{background:rgba(78,201,154,.08);border:1px solid rgba(78,201,154,.2);border-radius:var(--rs);padding:10px 12px;margin-bottom:10px;font-size:12px;color:#b8f0da;}
-.ai-label{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--green);margin-bottom:5px;}
-.ai-nudge{background:rgba(176,126,248,.08);border:1px solid rgba(176,126,248,.2);border-radius:var(--r);padding:13px 15px;font-size:13px;color:#dcc8ff;line-height:1.65;margin-bottom:8px;}
-.ai-nudge .ai-label{color:var(--upper);}
+.ai-box{background:rgba(79,201,138,.07);border:1px solid rgba(79,201,138,.18);border-radius:var(--rs);padding:11px 13px;margin-bottom:12px;font-size:12px;color:#a8f0cc;line-height:1.5;}
+.ai-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--green);margin-bottom:5px;display:flex;align-items:center;gap:4px;}
+.ai-nudge{background:rgba(192,132,252,.07);border:1px solid rgba(192,132,252,.18);border-radius:var(--r);padding:14px;font-size:13px;color:#e2c8ff;line-height:1.65;margin-bottom:8px;}
+.ai-nudge .ai-label{color:var(--purple);}
 
 /* Timer */
-.timer-val{font-family:var(--mono);font-size:34px;font-weight:500;letter-spacing:-1px;line-height:1;}
-.timer-sub{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-top:3px;}
+.timer-wrap{text-align:right;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.timer-val{font-size:32px;font-weight:300;letter-spacing:-1px;line-height:1;font-variant-numeric:tabular-nums;}
+.timer-sub{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-top:2px;}
 
 /* History pills */
-.hist-pill{background:var(--surface2);border-radius:var(--rs);padding:6px 10px;font-family:var(--mono);font-size:11px;color:var(--t2);margin-bottom:5px;display:flex;justify-content:space-between;}
+.hist-pill{background:var(--s2);border-radius:var(--rs);padding:8px 11px;font-size:11px;font-weight:500;color:var(--t2);margin-bottom:5px;display:flex;justify-content:space-between;align-items:center;}
+.hist-pill span:last-child{color:var(--text);}
 
 /* Progress */
-.pr-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--border);}
+.pr-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);}
 .pr-row:last-child{border-bottom:none;}
 .pr-name{font-size:13px;font-weight:500;flex:1;}
 .pr-sub{font-size:11px;color:var(--t2);font-weight:400;}
-.pr-val{font-family:var(--mono);font-size:13px;color:var(--green);font-weight:500;}
-.pbar-wrap{margin-bottom:10px;}
-.pbar-top{display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px;}
-.pbar-bg{height:4px;background:var(--surface2);border-radius:99px;overflow:hidden;}
+.pr-val{font-size:13px;font-weight:600;color:var(--green);}
+.pbar-wrap{margin-bottom:12px;}
+.pbar-top{display:flex;justify-content:space-between;font-size:12px;font-weight:500;margin-bottom:6px;}
+.pbar-bg{height:4px;background:var(--s2);border-radius:99px;overflow:hidden;}
 .pbar-fill{height:100%;border-radius:99px;background:var(--text);transition:width .5s ease;}
 
 /* Stats */
-.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px;}
-.scard{background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:11px 12px;}
-.sc-label{font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--t3);margin-bottom:4px;}
-.sc-val{font-size:22px;font-weight:500;color:var(--text);}
-.sc-unit{font-size:11px;color:var(--t2);font-weight:400;}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
+.scard{background:var(--s1);border:1px solid var(--border);border-radius:var(--r);padding:13px 14px;}
+.sc-label{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--t2);margin-bottom:5px;}
+.sc-val{font-size:26px;font-weight:300;color:var(--text);letter-spacing:-.5px;}
+.sc-unit{font-size:12px;color:var(--t2);font-weight:400;}
 
 /* Buttons */
-.btn-p{width:100%;padding:13px;border-radius:var(--rs);background:var(--text);color:var(--bg);border:none;cursor:pointer;font-size:13px;font-weight:500;margin-top:10px;transition:opacity .15s;font-family:var(--sans);}
-.btn-p:hover{opacity:.85;}
+.btn-p{width:100%;padding:14px;border-radius:var(--rs);background:var(--text);color:var(--bg);border:none;cursor:pointer;font-size:13px;font-weight:600;margin-top:10px;transition:opacity .15s;font-family:'Inter',sans-serif;letter-spacing:.01em;}
+.btn-p:hover{opacity:.88;}
+.btn-p:active{opacity:.75;}
 .btn-p:disabled{opacity:.3;cursor:not-allowed;}
-.btn-g{width:100%;padding:11px;border:1px dashed var(--border-md);border-radius:var(--rs);background:none;cursor:pointer;font-size:12px;color:var(--t2);margin-top:6px;transition:all .15s;font-family:var(--sans);}
-.btn-g:hover{background:var(--surface);color:var(--text);}
+.btn-g{width:100%;padding:12px;border:1px dashed var(--border-md);border-radius:var(--rs);background:none;cursor:pointer;font-size:12px;font-weight:500;color:var(--t2);margin-top:6px;transition:all .15s;font-family:'Inter',sans-serif;}
+.btn-g:hover{background:var(--s1);color:var(--text);}
 .btn-g:disabled{opacity:.35;cursor:not-allowed;}
-.npair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
-.npair button{padding:10px;border:1px solid var(--border);border-radius:var(--rs);background:var(--surface);cursor:pointer;font-size:12px;color:var(--t2);font-family:var(--sans);transition:all .15s;}
+.npair{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;}
+.npair button{padding:12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--s1);cursor:pointer;font-size:12px;font-weight:500;color:var(--t2);font-family:'Inter',sans-serif;transition:all .15s;}
 .npair button:hover{border-color:var(--border-md);color:var(--text);}
 .npair button:disabled{opacity:.3;cursor:not-allowed;}
 
-/* Misc */
-.step-bar{display:flex;gap:4px;margin-bottom:14px;}
-.step-pip{flex:1;height:3px;border-radius:99px;background:var(--border-md);transition:background .2s;}
+/* Step bar */
+.step-bar{display:flex;gap:4px;margin-bottom:16px;}
+.step-pip{flex:1;height:3px;border-radius:99px;background:var(--s3);transition:background .2s;}
 .step-pip.done{background:var(--text);}
-.sdot{width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;}
+
+/* Misc */
+.sdot{width:9px;height:9px;border-radius:50%;display:inline-block;flex-shrink:0;}
 .irow{display:flex;align-items:center;justify-content:space-between;}
-textarea{width:100%;padding:8px 10px;font-size:12px;border:1px solid var(--border);border-radius:var(--rs);background:var(--surface2);color:var(--text);resize:none;height:50px;font-family:var(--sans);transition:border-color .15s;}
+textarea{width:100%;padding:10px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--rs);background:var(--s2);color:var(--text);resize:none;height:54px;font-family:'Inter',sans-serif;transition:border-color .15s;line-height:1.4;}
 textarea:focus{outline:none;border-color:var(--border-hi);}
 textarea::placeholder{color:var(--t3);}
 .spin{display:inline-block;width:13px;height:13px;border:2px solid var(--border-md);border-top-color:var(--text);border-radius:50%;animation:spin .6s linear infinite;vertical-align:middle;}
 @keyframes spin{to{transform:rotate(360deg);}}
-.empty{text-align:center;padding:48px 0;color:var(--t3);font-family:var(--mono);font-size:11px;line-height:2;}
-input[type=number]::-webkit-inner-spin-button{opacity:.3;}
+.empty{text-align:center;padding:52px 0;color:var(--t3);font-size:12px;font-weight:500;line-height:2;}
+input[type=number]{-moz-appearance:textfield;}
+input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;}
+.divider{height:1px;background:var(--border);margin:14px 0;}
 `;
 
 // ── App root ──────────────────────────────────────────────────────────────────
@@ -307,7 +331,6 @@ export default function GymTracker() {
     fetchHistory().then(rows => { setHistory(rows); setLoading(false); });
   }, []);
 
-  // PRs
   const prs = {};
   history.filter(r => r.is_machine!=="true" && r.kg && r.reps).forEach(r => {
     const kg=parseFloat(r.kg), reps=parseInt(r.reps);
@@ -317,7 +340,6 @@ export default function GymTracker() {
     }
   });
 
-  // Stats
   const sessionKeys = [...new Set(history.map(r=>r.date+r.session))];
   const totalSessions = sessionKeys.length;
   const weekDone = getWeekSessions(history);
@@ -344,16 +366,16 @@ export default function GymTracker() {
     <>
       <style>{S}</style>
       <div className="app">
+        {tab==="plan"     && <PlanView history={history} loading={loading} weekDone={weekDone} onStart={startSession}/>}
+        {tab==="log"      && <LogView session={session} setSession={setSession} history={history} onFinish={finishSession} onStartNew={()=>setTab("plan")}/>}
+        {tab==="progress" && <ProgressView history={history} loading={loading} prs={prs} totalSessions={totalSessions} thisWeek={thisWeek} avgRpe={avgRpe} nudge={nudge} nudgeLoading={nudgeLoading} onNudge={async()=>{setNudgeLoading(true);const n=await getProgramNudge(history);setNudge(n);setNudgeLoading(false);}}/>}
         <nav className="nav">
-          {[{id:"plan",icon:"ti-calendar",label:"Plan"},{id:"log",icon:"ti-barbell",label:"Log"},{id:"progress",icon:"ti-trending-up",label:"Progress"}].map(t=>(
+          {[{id:"plan",icon:"ti-calendar",label:"Plan"},{id:"log",icon:"ti-barbell",label:"Log"},{id:"progress",icon:"ti-chart-bar",label:"Progress"}].map(t=>(
             <button key={t.id} className={`ntab ${tab===t.id?"active":""}`} onClick={()=>setTab(t.id)}>
               <i className={`ti ${t.icon}`} aria-hidden="true"/>{t.label}
             </button>
           ))}
         </nav>
-        {tab==="plan"     && <PlanView history={history} loading={loading} weekDone={weekDone} onStart={startSession}/>}
-        {tab==="log"      && <LogView session={session} setSession={setSession} history={history} onFinish={finishSession} onStartNew={()=>setTab("plan")}/>}
-        {tab==="progress" && <ProgressView history={history} loading={loading} prs={prs} totalSessions={totalSessions} thisWeek={thisWeek} avgRpe={avgRpe} nudge={nudge} nudgeLoading={nudgeLoading} onNudge={async()=>{setNudgeLoading(true);const n=await getProgramNudge(history);setNudge(n);setNudgeLoading(false);}}/>}
       </div>
     </>
   );
@@ -365,83 +387,89 @@ function PlanView({ history, loading, weekDone, onStart }) {
   const sessionsLeft = Object.keys(PROGRAMS).filter(k => !weekDone[k]);
   const done = Object.keys(weekDone).length;
 
-  // Last session date per type
   function lastDate(type) {
     const rows = history.filter(r=>r.session===type);
     return rows.length ? rows[rows.length-1].date : null;
   }
 
+  const { start } = getWeekBounds();
+  const weekLabel = start.toLocaleDateString("en-AU", { day:"numeric", month:"short" });
+
   return (
     <div className="view">
-      <div className="irow" style={{marginBottom:16}}>
+      <div className="hbar">
         <div>
-          <div style={{fontSize:16,fontWeight:500}}>This week</div>
-          <div className="week-summary" style={{marginBottom:0,marginTop:2}}>
-            <span>{done}</span> of 4 sessions done
-            {sessionsLeft.length > 0 && <> · <span>{sessionsLeft.map(k=>PROGRAMS[k].label.replace("Heavy ","").replace(" Consolidation","")).join(", ")}</span> to go</>}
+          <div className="hbar-title">This week</div>
+          <div style={{fontSize:11,color:"var(--t2)",fontWeight:500,marginTop:2}}>
+            w/c {weekLabel}
           </div>
         </div>
         <div className="loctog">
           <button className={`locbtn ${loc==="gym"?"active":""}`} onClick={()=>setLoc("gym")}>
-            <i className="ti ti-building" aria-hidden="true" style={{fontSize:12,marginRight:4}}/>Gym
+            <i className="ti ti-building" aria-hidden="true" style={{fontSize:12,marginRight:4,verticalAlign:-1}}/>Gym
           </button>
           <button className={`locbtn ${loc==="home"?"active":""}`} onClick={()=>setLoc("home")}>
-            <i className="ti ti-home" aria-hidden="true" style={{fontSize:12,marginRight:4}}/>Home
+            <i className="ti ti-home" aria-hidden="true" style={{fontSize:12,marginRight:4,verticalAlign:-1}}/>Home
           </button>
         </div>
       </div>
 
-      {/* Week tracker — 4 session cards */}
-      <div className="week-track" style={{marginBottom:20}}>
+      <div className="week-grid">
         {Object.entries(PROGRAMS).map(([key,prog])=>{
           const isDone = !!weekDone[key];
           const last = lastDate(key);
           return (
-            <div key={key} className={`wt-card ${isDone?"done":"todo"}`}
-              style={isDone ? {background:`${prog.color}18`,borderColor:`${prog.color}40`} : {}}
-              onClick={()=>!isDone&&onStart(key,loc)}
+            <div key={key} className={`wcard ${isDone?"done":"todo"}`}
+              style={isDone ? {background:`color-mix(in srgb, ${prog.color} 10%, var(--s1))`,borderColor:`color-mix(in srgb, ${prog.color} 30%, transparent)`} : {background:"var(--s1)"}}
+              onClick={()=>onStart(key,loc)}
             >
-              <div className="wt-label" style={{color:prog.color}}>
-                {isDone ? <i className="ti ti-check" aria-hidden="true" style={{fontSize:10,marginRight:3}}/> : <i className="ti ti-circle" aria-hidden="true" style={{fontSize:10,marginRight:3}}/>}
-                {isDone?"done":"to do"}
+              <div className="wc-tag" style={{color:prog.color}}>
+                <i className={`ti ${isDone?"ti-check":"ti-circle"}`} aria-hidden="true" style={{fontSize:10}}/>
+                {isDone ? "done" : "to do"}
               </div>
-              <div className="wt-name">{prog.label.replace("Heavy ","").replace(" Consolidation","")}</div>
+              <div className="wc-name">{prog.label}</div>
               {isDone
-                ? <div className="wt-date">{weekDone[key]}</div>
-                : last ? <div className="wt-date">last: {last}</div> : <div className="wt-date" style={{color:"var(--t3)"}}>not yet logged</div>
+                ? <div className="wc-date">{weekDone[key]}</div>
+                : last
+                  ? <div className="wc-date">last: {last}</div>
+                  : <div className="wc-date" style={{color:"var(--t3)"}}>not logged yet</div>
               }
-              <i className={`ti ${isDone?"ti-check":"ti-chevron-right"} wt-icon`} aria-hidden="true" style={{color:prog.color}}/>
+              <i className={`ti ${isDone?"ti-check":"ti-chevron-right"} wc-icon`} aria-hidden="true" style={{color:prog.color}}/>
             </div>
           );
         })}
       </div>
 
-      {/* Start session — undone sessions first */}
+      <div className="week-meta">
+        <strong>{done}</strong> of 4 done
+        {sessionsLeft.length > 0 && <> · {sessionsLeft.map(k=>PROGRAMS[k].label).join(", ")} to go</>}
+      </div>
+
       <p className="slabel">Start a session</p>
       {[...sessionsLeft, ...Object.keys(weekDone)].map(key=>{
         const prog = PROGRAMS[key];
         const isDone = !!weekDone[key];
         const last = lastDate(key);
         return (
-          <div key={key} className="card" style={{cursor:"pointer",opacity:isDone?.6:1}} onClick={()=>onStart(key,loc)}>
-            <div className="crow">
+          <div key={key} className="card" style={{cursor:"pointer",opacity:isDone?.55:1}} onClick={()=>onStart(key,loc)}>
+            <div className="card-row">
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <span className="sdot" style={{background:prog.color}}/>
                 <div>
-                  <div className="ctitle">{prog.label}</div>
-                  <div className="csub">{prog.groups.map(g=>`${g.pick}× ${g.name}`).join(" · ")}</div>
-                  {last && <div className="csub" style={{marginTop:1}}>Last: {last}</div>}
+                  <div className="card-title">{prog.label}</div>
+                  <div className="card-sub">{prog.groups.map(g=>`${g.pick}× ${g.name}`).join(" · ")}</div>
+                  {last && <div className="card-sub" style={{marginTop:1}}>Last: {last}</div>}
                 </div>
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                {isDone && <span className="badge b-green">done this week</span>}
+              <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                {isDone && <span className="badge b-green">✓</span>}
                 <i className="ti ti-chevron-right" aria-hidden="true" style={{color:"var(--t3)",fontSize:16}}/>
               </div>
             </div>
           </div>
         );
       })}
-      {loading && <div className="empty"><span className="spin" style={{display:"block",margin:"0 auto 8px"}}/><br/>Loading from GitHub…</div>}
+      {loading && <div className="empty"><span className="spin" style={{display:"block",margin:"0 auto 10px"}}/><br/>Loading from GitHub…</div>}
     </div>
   );
 }
@@ -482,23 +510,25 @@ function ExercisePicker({ session, setSession }) {
 
   return (
     <div className="view">
-      <div style={{marginBottom:16}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3}}>
-          <span className="sdot" style={{background:PROGRAMS[session.type].color}}/>
-          <span style={{fontSize:16,fontWeight:500}}>{PROGRAMS[session.type].label}</span>
-          <span className="badge b-gray" style={{marginLeft:2}}>{session.location==="gym"?"Gym":"Home"}</span>
+      <div className="hbar">
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+            <span className="sdot" style={{background:PROGRAMS[session.type].color}}/>
+            <span style={{fontSize:16,fontWeight:600}}>{PROGRAMS[session.type].label}</span>
+          </div>
+          <div style={{fontSize:12,color:"var(--t2)",fontWeight:500}}>{session.date} · {session.location==="gym"?"Gym":"Home"}</div>
         </div>
-        <div style={{fontSize:12,color:"var(--t2)"}}>{session.date} · Pick your exercises for today</div>
+        <span className="badge b-gray">Pick exercises</span>
       </div>
 
       {prog.groups.map((g,gi)=>{
         const list = session.location==="gym" ? g.gym : g.home;
         const picked = sel[gi].size;
         return (
-          <div key={gi} style={{marginBottom:14}}>
+          <div key={gi} style={{marginBottom:16}}>
             <p className="slabel">
               {g.name}
-              <span style={{color:picked===g.pick?"var(--green)":"var(--t3)",marginLeft:8}}>{picked}/{g.pick}</span>
+              <span className="pick-count" style={{color:picked===g.pick?"var(--green)":"var(--t2)"}}>{picked}/{g.pick}</span>
             </p>
             <div className="pick-grid">
               {list.map(name=>(
@@ -513,7 +543,7 @@ function ExercisePicker({ session, setSession }) {
       })}
 
       <button className="btn-p" disabled={!allValid} onClick={confirm}>
-        Start logging <i className="ti ti-arrow-right" aria-hidden="true"/>
+        Start logging →
       </button>
     </div>
   );
@@ -525,7 +555,6 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
   const [timerOn, setTimerOn]     = useState(false);
   const ref = useRef(null);
 
-  // All hooks must be at the top — before any early returns
   useEffect(()=>{
     if(timerOn){
       ref.current=setInterval(()=>setTimerSecs(s=>{
@@ -536,8 +565,8 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
     return ()=>clearInterval(ref.current);
   },[timerOn]);
 
-  const idx   = session?.exIdx ?? 0;
-  const ex    = session?.exercises?.[idx] ?? null;
+  const idx = session?.exIdx ?? 0;
+  const ex  = session?.exercises?.[idx] ?? null;
 
   useEffect(()=>{
     if(!ex||isMachine(ex.name)||ex.suggestion||ex.suggLoading) return;
@@ -550,37 +579,37 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
   function startTimer(){ setTimerSecs(120); setTimerOn(true); }
 
   if(!session) return (
-    <div className="view" style={{textAlign:"center",paddingTop:60}}>
-      <i className="ti ti-barbell" aria-hidden="true" style={{fontSize:48,color:"var(--t3)",display:"block",marginBottom:12}}/>
-      <div style={{color:"var(--t2)",marginBottom:20}}>No active session</div>
-      <button className="btn-p" style={{maxWidth:220,margin:"0 auto"}} onClick={onStartNew}>Start a session</button>
+    <div className="view" style={{textAlign:"center",paddingTop:80}}>
+      <i className="ti ti-barbell" aria-hidden="true" style={{fontSize:52,color:"var(--t3)",display:"block",marginBottom:14}}/>
+      <div style={{color:"var(--t2)",marginBottom:24,fontWeight:500}}>No active session</div>
+      <button className="btn-p" style={{maxWidth:240,margin:"0 auto"}} onClick={onStartNew}>Start a session</button>
     </div>
   );
 
   if(session.step==="pick") return <ExercisePicker session={session} setSession={setSession}/>;
 
   if(session.step==="done") return (
-    <div className="view" style={{textAlign:"center",paddingTop:40}}>
-      <i className="ti ti-trophy" aria-hidden="true" style={{fontSize:52,color:"var(--green)",display:"block",marginBottom:14}}/>
-      <div style={{fontSize:18,fontWeight:500,marginBottom:6}}>Session complete</div>
-      <div style={{fontSize:13,color:"var(--t2)",marginBottom:28}}>{session.exercises.length} exercises · {session.date}</div>
+    <div className="view" style={{textAlign:"center",paddingTop:50}}>
+      <i className="ti ti-trophy" aria-hidden="true" style={{fontSize:56,color:"var(--green)",display:"block",marginBottom:16}}/>
+      <div style={{fontSize:20,fontWeight:600,marginBottom:6}}>Session done</div>
+      <div style={{fontSize:13,color:"var(--t2)",marginBottom:28,fontWeight:500}}>{session.exercises.length} exercises · {session.date}</div>
       <div className="card" style={{textAlign:"left",marginBottom:14}}>
         {session.exercises.map((ex,i)=>(
           <div key={i} className="pr-row">
             <div style={{flex:1}}>
               <div style={{fontSize:13,fontWeight:500}}>{ex.name}</div>
-              <div style={{fontSize:12,color:"var(--t2)"}}>{ex.group}</div>
+              <div style={{fontSize:11,color:"var(--t2)"}}>{ex.group}</div>
             </div>
-            <div style={{fontFamily:"var(--mono)",fontSize:12,color:"var(--t2)"}}>
+            <div style={{fontSize:12,fontWeight:600,color:"var(--t2)"}}>
               {ex.sets.filter(s=>s.done).length} sets · {[...new Set(ex.sets.filter(s=>s.kg).map(s=>s.kg))].join("/")} kg
             </div>
           </div>
         ))}
       </div>
-      <button className="btn-p" onClick={onFinish} style={{background:"var(--blue)",maxWidth:300,margin:"0 auto"}}>
-        <i className="ti ti-download" aria-hidden="true" style={{marginRight:6}}/>Download CSV &amp; finish
+      <button className="btn-p" onClick={onFinish} style={{background:"var(--blue)",maxWidth:320,margin:"0 auto"}}>
+        <i className="ti ti-download" aria-hidden="true" style={{marginRight:6}}/>Download CSV & finish
       </button>
-      <div style={{fontSize:11,color:"var(--t3)",marginTop:10,fontFamily:"var(--mono)"}}>
+      <div style={{fontSize:11,color:"var(--t3)",marginTop:12,fontWeight:500}}>
         Push to sessions/ in your GitHub repo
       </div>
     </div>
@@ -595,35 +624,38 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
   function toggleDone(si){ updateSet(si,"done",!ex.sets[si].done); if(!ex.sets[si].done) startTimer(); }
 
   const exHistory = history.filter(r=>r.exercise===ex.name&&r.kg).slice(-5).reverse();
+  const prog = PROGRAMS[session.type];
 
   return (
     <div className="view">
       <div className="step-bar">
-        {session.exercises.map((_,i)=><div key={i} className={`step-pip ${i<=idx?"done":""}`}/>)}
+        {session.exercises.map((_,i)=><div key={i} className={`step-pip ${i<=idx?"done":""}`} style={i===idx?{background:prog.color}:{}}/>)}
       </div>
 
-      <div className="irow" style={{marginBottom:14}}>
-        <div>
-          <div style={{fontSize:17,fontWeight:500}}>{ex.name}</div>
-          <div style={{fontSize:12,color:"var(--t2)",marginTop:2}}>
-            {ex.group} · {idx+1} of {total}
+      <div className="irow" style={{marginBottom:14,alignItems:"flex-start"}}>
+        <div style={{flex:1}}>
+          <div style={{fontSize:18,fontWeight:600,letterSpacing:"-.3px",lineHeight:1.2}}>{ex.name}</div>
+          <div style={{fontSize:12,color:"var(--t2)",fontWeight:500,marginTop:4}}>
+            {ex.group} · {idx+1}/{total}
             {isMachine(ex.name)&&<span className="badge b-gray" style={{marginLeft:8}}>machine</span>}
           </div>
         </div>
-        <div style={{textAlign:"right",cursor:"pointer"}} onClick={()=>timerOn?setTimerOn(false):startTimer()}>
+        <div className="timer-wrap" onClick={()=>timerOn?setTimerOn(false):startTimer()}>
           <div className="timer-val" style={{color:timerSecs<30&&timerOn?"var(--red)":"var(--text)"}}>
             {mins}:{String(secs).padStart(2,"0")}
           </div>
-          <div className="timer-sub">{timerOn?"tap to pause":"tap to start"}</div>
+          <div className="timer-sub">{timerOn?"tap to pause":"rest timer"}</div>
         </div>
       </div>
 
       {!isMachine(ex.name)&&(
         <div className="ai-box">
-          <div className="ai-label"><i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:10,marginRight:4}}/>AI suggestion</div>
+          <div className="ai-label">
+            <i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:11}}/>AI suggestion
+          </div>
           {ex.suggLoading ? <span><span className="spin" style={{marginRight:6}}/>Calculating…</span>
            : ex.suggestion ? <span><strong>{ex.suggestion.kg} kg × {ex.suggestion.reps}</strong>{ex.suggestion.rationale?" — "+ex.suggestion.rationale:""}</span>
-           : <span style={{color:"var(--t3)"}}>No history yet — log your starting weight.</span>}
+           : <span style={{color:"rgba(168,240,204,.5)"}}>No history yet — log your starting weight.</span>}
         </div>
       )}
 
@@ -633,10 +665,10 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
           {exHistory.map((r,i)=>(
             <div key={i} className="hist-pill">
               <span>{r.date}</span>
-              <span>{r.kg}kg × {r.reps} <span style={{color:"var(--t3)"}}>RPE {r.rpe}</span></span>
+              <span>{r.kg}kg × {r.reps} <span style={{color:"var(--t3)",marginLeft:4}}>RPE {r.rpe}</span></span>
             </div>
           ))}
-          <div style={{marginBottom:12}}/>
+          <div style={{marginBottom:14}}/>
         </>
       )}
 
@@ -644,24 +676,24 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
       {ex.sets.map((st,si)=>(
         <div key={si} className="sr">
           <span className="snum">{si+1}</span>
-          <input className={`sinput ${st.done?"dk":""}`} type="number" step="2.5" value={st.kg} placeholder="—" onChange={e=>updateSet(si,"kg",e.target.value)}/>
-          <input className={`sinput ${st.done?"dk":""}`} type="number" min="1" max="20" value={st.reps} placeholder="—" onChange={e=>updateSet(si,"reps",e.target.value)}/>
-          <input className={`sinput ${st.done?"dk":""}`} type="number" min="5" max="10" value={st.rpe} placeholder="—" onChange={e=>updateSet(si,"rpe",e.target.value)}/>
+          <input className={`sinput ${st.done?"dk":""}`} type="number" inputMode="decimal" step="2.5" value={st.kg} placeholder="—" onChange={e=>updateSet(si,"kg",e.target.value)}/>
+          <input className={`sinput ${st.done?"dk":""}`} type="number" inputMode="numeric" min="1" max="20" value={st.reps} placeholder="—" onChange={e=>updateSet(si,"reps",e.target.value)}/>
+          <input className={`sinput ${st.done?"dk":""}`} type="number" inputMode="numeric" min="5" max="10" value={st.rpe} placeholder="—" onChange={e=>updateSet(si,"rpe",e.target.value)}/>
           <button className={`chkbtn ${st.done?"done":""}`} onClick={()=>toggleDone(si)} aria-label="Mark set done">
             <i className="ti ti-check" aria-hidden="true"/>
           </button>
         </div>
       ))}
 
-      <textarea placeholder="Notes…" value={ex.sets[0].notes||""} onChange={e=>updateSet(0,"notes",e.target.value)} style={{marginTop:8}}/>
+      <textarea placeholder="Notes…" value={ex.sets[0].notes||""} onChange={e=>updateSet(0,"notes",e.target.value)} style={{marginTop:10}}/>
 
       <div className="npair">
         <button disabled={idx===0} onClick={()=>setSession(s=>({...s,exIdx:idx-1}))}>
           {idx>0?"← "+session.exercises[idx-1].name:"←"}
         </button>
         {idx<total-1
-          ? <button style={{fontWeight:500,color:"var(--text)"}} onClick={()=>setSession(s=>({...s,exIdx:idx+1}))}>{session.exercises[idx+1].name} →</button>
-          : <button style={{fontWeight:500,color:"var(--green)"}} onClick={()=>setSession(s=>({...s,step:"done"}))}>Finish session →</button>
+          ? <button style={{fontWeight:600,color:"var(--text)"}} onClick={()=>setSession(s=>({...s,exIdx:idx+1}))}>{session.exercises[idx+1].name} →</button>
+          : <button style={{fontWeight:600,color:"var(--green)"}} onClick={()=>setSession(s=>({...s,step:"done"}))}>Finish →</button>
         }
       </div>
     </div>
@@ -671,17 +703,21 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
 // ── Progress View ─────────────────────────────────────────────────────────────
 function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, nudge, nudgeLoading, onNudge }) {
   const freePRs = Object.entries(prs).filter(([n])=>!isMachine(n)).sort((a,b)=>b[1].date.localeCompare(a[1].date)).slice(0,8);
-  const sessionKeys = [...new Set(history.map(r=>r.date+r.session))];
+  const sessionKeys=[...new Set(history.map(r=>r.date+r.session))];
   const recent4=sessionKeys.slice(-4), prev4=sessionKeys.slice(-8,-4);
 
   function vol(keys,ex){ return history.filter(r=>keys.includes(r.date+r.session)&&r.exercise===ex&&r.kg).reduce((s,r)=>s+(parseFloat(r.kg)*(parseInt(r.reps)||0)),0); }
-  const keyLifts=["Bench","Squats","Deadlifts","Overhead Press – Bar","Pull Ups","Barbell Row"];
+  const keyLifts=["Bench – Bar","Bench – Dumbbells","Squats","Deadlifts","Overhead Press – Bar","Pull Ups","Barbell Row"];
   const liftsWithData=keyLifts.filter(l=>history.some(r=>r.exercise===l&&r.kg));
 
   return (
     <div className="view">
+      <div className="hbar">
+        <div className="hbar-title">Progress</div>
+      </div>
+
       <div className="stat-grid">
-        {[{label:"Sessions",val:totalSessions,unit:""},{label:"This week",val:thisWeek,unit:"/4"},{label:"PRs",val:Object.keys(prs).length,unit:""},{label:"Avg RPE",val:avgRpe,unit:""}].map(s=>(
+        {[{label:"Total sessions",val:totalSessions,unit:""},{label:"This week",val:thisWeek,unit:" /4"},{label:"PRs tracked",val:Object.keys(prs).length,unit:""},{label:"Avg RPE",val:avgRpe,unit:""}].map(s=>(
           <div key={s.label} className="scard">
             <div className="sc-label">{s.label}</div>
             <div className="sc-val">{s.val}<span className="sc-unit">{s.unit}</span></div>
@@ -691,16 +727,18 @@ function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, 
 
       <p className="slabel">AI programme review</p>
       {nudge
-        ? <div className="ai-nudge"><div className="ai-label"><i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:10,marginRight:4}}/>Coach feedback</div>{nudge}</div>
+        ? <div className="ai-nudge"><div className="ai-label"><i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:11}}/>Coach feedback</div>{nudge}</div>
         : <button className="btn-g" onClick={onNudge} disabled={nudgeLoading||history.length<15}>
-            {nudgeLoading?<><span className="spin" style={{marginRight:6}}/>Analysing…</>:history.length<15?"Log more sessions to unlock AI review":<><i className="ti ti-sparkles" aria-hidden="true" style={{marginRight:6}}/>Get AI programme feedback ↗</>}
+            {nudgeLoading?<><span className="spin" style={{marginRight:6}}/>Analysing your training…</>
+             :history.length<15?"Log more sessions to unlock AI review"
+             :<><i className="ti ti-sparkles" aria-hidden="true" style={{marginRight:6}}/>Get AI programme feedback ↗</>}
           </button>
       }
 
       {freePRs.length>0&&(
         <>
           <p className="slabel">Free weight PRs</p>
-          <div className="card" style={{cursor:"default"}}>
+          <div className="card">
             {freePRs.map(([name,pr])=>(
               <div key={name} className="pr-row">
                 <div style={{flex:1}}><div className="pr-name">{name}</div><div className="pr-sub">{pr.date}</div></div>
@@ -713,8 +751,8 @@ function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, 
 
       {liftsWithData.length>0&&(
         <>
-          <p className="slabel">Volume · recent 4 vs prev 4 sessions</p>
-          <div className="card" style={{cursor:"default"}}>
+          <p className="slabel">Volume · recent 4 vs prev 4</p>
+          <div className="card">
             {liftsWithData.map(lift=>{
               const r=vol(recent4,lift), p=vol(prev4,lift);
               const pct=p>0?Math.min(Math.round((r/p)*100),100):100;
@@ -722,8 +760,8 @@ function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, 
               return (
                 <div key={lift} className="pbar-wrap">
                   <div className="pbar-top">
-                    <span style={{fontWeight:500}}>{lift}</span>
-                    <span style={{color:delta>=0?"var(--green)":"var(--red)",fontFamily:"var(--mono)",fontSize:11}}>{delta>=0?"+":""}{delta}%</span>
+                    <span>{lift}</span>
+                    <span style={{color:delta>=0?"var(--green)":"var(--red)",fontSize:11}}>{delta>=0?"+":""}{delta}%</span>
                   </div>
                   <div className="pbar-bg"><div className="pbar-fill" style={{width:pct+"%"}}/></div>
                 </div>
@@ -734,9 +772,9 @@ function ProgressView({ history, loading, prs, totalSessions, thisWeek, avgRpe, 
       )}
 
       {!loading&&history.length===0&&(
-        <div className="empty">No session data yet.<br/>Push CSV files to sessions/ in your GitHub repo.<br/><span style={{color:"var(--t3)"}}>github.com/ashrleahy/GymApp</span></div>
+        <div className="empty">No session data yet.<br/>Log a session and push the CSV<br/>to sessions/ in your GitHub repo.</div>
       )}
-      {loading&&<div className="empty"><span className="spin" style={{display:"block",margin:"0 auto 8px"}}/><br/>Loading from GitHub…</div>}
+      {loading&&<div className="empty"><span className="spin" style={{display:"block",margin:"0 auto 10px"}}/><br/>Loading from GitHub…</div>}
     </div>
   );
 }
