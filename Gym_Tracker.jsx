@@ -8,8 +8,8 @@ const PROGRAMS = {
     label: "Heavy Push", color: "#e8714a",
     groups: [
       { name: "Chest", pick: 2,
-        gym:  ["Incline Bench","Bench","Cable Fly","Machine Bench","Push Ups"],
-        home: ["Incline Bench","Bench","Push Ups"] },
+        gym:  ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Cable Fly","Machine Bench","Push Ups"],
+        home: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Push Ups"] },
       { name: "Shoulders", pick: 2,
         gym:  ["Overhead Press – Bar","Overhead Press – Dumbbells","Lateral Raises – Cable","Lateral Raises – Dumbbells"],
         home: ["Overhead Press – Bar","Overhead Press – Dumbbells","Lateral Raises – Dumbbells"] },
@@ -49,7 +49,7 @@ const PROGRAMS = {
   upper: {
     label: "Upper Consolidation", color: "#b07ef8",
     groups: [
-      { name: "Chest",    pick: 1, gym: ["Incline Bench","Bench","Machine Bench","Push Ups"],          home: ["Bench","Push Ups"] },
+      { name: "Chest",    pick: 1, gym: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Machine Bench","Push Ups"], home: ["Incline Bench – Bar","Incline Bench – Dumbbells","Bench – Bar","Bench – Dumbbells","Push Ups"] },
       { name: "Shoulders",pick: 1, gym: ["Overhead Press – Bar","Overhead Press – Dumbbells","Lateral Raises – Dumbbells"], home: ["Overhead Press – Dumbbells","Lateral Raises – Dumbbells"] },
       { name: "Tris",     pick: 1, gym: ["Dips","Cable Push Downs","Overhead Extensions"],             home: ["Dips","Overhead Extensions"] },
       { name: "Back",     pick: 1, gym: ["Pull Ups","Chin Ups","Lat Pulldown","Barbell Row"],          home: ["Pull Ups","Chin Ups","Barbell Row"] },
@@ -525,6 +525,7 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
   const [timerOn, setTimerOn]     = useState(false);
   const ref = useRef(null);
 
+  // All hooks must be at the top — before any early returns
   useEffect(()=>{
     if(timerOn){
       ref.current=setInterval(()=>setTimerSecs(s=>{
@@ -534,6 +535,17 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
     } else clearInterval(ref.current);
     return ()=>clearInterval(ref.current);
   },[timerOn]);
+
+  const idx   = session?.exIdx ?? 0;
+  const ex    = session?.exercises?.[idx] ?? null;
+
+  useEffect(()=>{
+    if(!ex||isMachine(ex.name)||ex.suggestion||ex.suggLoading) return;
+    setSession(s=>({...s,exercises:s.exercises.map((e,i)=>i!==idx?e:{...e,suggLoading:true})}));
+    getWeightSuggestion(ex.name,history).then(sugg=>{
+      setSession(s=>({...s,exercises:s.exercises.map((e,i)=>i!==idx?e:{...e,suggestion:sugg,suggLoading:false})}));
+    });
+  },[idx, session?.step]);
 
   function startTimer(){ setTimerSecs(120); setTimerOn(true); }
 
@@ -574,8 +586,6 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
     </div>
   );
 
-  const ex  = session.exercises[session.exIdx];
-  const idx = session.exIdx;
   const total = session.exercises.length;
   const mins=Math.floor(timerSecs/60), secs=timerSecs%60;
 
@@ -583,16 +593,6 @@ function LogView({ session, setSession, history, onFinish, onStartNew }) {
     setSession(s=>({...s,exercises:s.exercises.map((e,ei)=>ei!==idx?e:{...e,sets:e.sets.map((st,sii)=>sii!==si?st:{...st,[field]:val})})}));
   }
   function toggleDone(si){ updateSet(si,"done",!ex.sets[si].done); if(!ex.sets[si].done) startTimer(); }
-
-  // Auto-load suggestion on exercise change
-  useEffect(()=>{
-    if(!ex.suggestion&&!ex.suggLoading&&!isMachine(ex.name)){
-      setSession(s=>({...s,exercises:s.exercises.map((e,i)=>i!==idx?e:{...e,suggLoading:true})}));
-      getWeightSuggestion(ex.name,history).then(sugg=>{
-        setSession(s=>({...s,exercises:s.exercises.map((e,i)=>i!==idx?e:{...e,suggestion:sugg,suggLoading:false})}));
-      });
-    }
-  },[idx]);
 
   const exHistory = history.filter(r=>r.exercise===ex.name&&r.kg).slice(-5).reverse();
 
