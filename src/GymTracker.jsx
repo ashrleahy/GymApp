@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 
 const GITHUB_RAW = "https://raw.githubusercontent.com/ashrleahy/GymApp/main";
-const GITHUB_API = "https://api.github.com/repos/ashrleahy/GymApp";
 
 const PROGRAMS = {
   push: {
@@ -97,13 +96,12 @@ function downloadCSV(session) {
 
 async function fetchHistory() {
   try {
-    const res = await fetch(`${GITHUB_API}/git/trees/main?recursive=1`);
-    if (!res.ok) return [];
-    const { tree } = await res.json();
-    const paths = tree.filter(f => f.path.startsWith("sessions/") && f.path.endsWith(".csv")).map(f => f.path);
+    const idxRes = await fetch(`${GITHUB_RAW}/sessions/index.txt?t=${Date.now()}`);
+    if (!idxRes.ok) return [];
+    const filenames = (await idxRes.text()).trim().split("\n").map(f => f.trim()).filter(Boolean);
     const all = [];
-    await Promise.all(paths.map(async p => {
-      const r = await fetch(`${GITHUB_RAW}/${p}?t=${Date.now()}`);
+    await Promise.all(filenames.map(async fname => {
+      const r = await fetch(`${GITHUB_RAW}/sessions/${fname}?t=${Date.now()}`);
       if (r.ok) all.push(...parseCSV(await r.text()));
     }));
     return all.sort((a,b) => a.date.localeCompare(b.date));
