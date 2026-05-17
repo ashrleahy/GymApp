@@ -60,23 +60,54 @@ const MACHINES = new Set(["Cable Fly","Machine Bench","Overhead Press – Machin
 const isMachine = ex => MACHINES.has(ex);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-const STORAGE_KEY = "gymtracker_v1";
+const STORAGE_KEY = "gymtracker_sessions";
+const SCHEMA_VERSION = 2;
+const SCHEMA_KEY = "gymtracker_schema_version";
+
+function migrateSession(session) {
+  // v1 → v2: move rpe/notes from sets to exercise level
+  const exercises = (session.exercises || []).map(ex => {
+    const sets = (ex.sets || []).map(s => ({
+      kg: s.kg ?? "",
+      reps: s.reps ?? "",
+      done: s.done ?? false,
+    }));
+    return {
+      name: ex.name,
+      group: ex.group,
+      sets,
+      rpe: ex.rpe ?? (ex.sets?.[0]?.rpe ?? ""),
+      notes: ex.notes ?? (ex.sets?.[0]?.notes ?? ""),
+      suggestion: null,
+      suggLoading: false,
+    };
+  });
+  return { ...session, exercises };
+}
 
 function loadHistory() {
   try {
+    const version = parseInt(localStorage.getItem(SCHEMA_KEY) || "1");
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
+    if (!raw) return [];
+    let sessions = JSON.parse(raw);
+    if (version < SCHEMA_VERSION) {
+      sessions = sessions.map(migrateSession);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
+      localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
+    }
+    return sessions;
   } catch { return []; }
 }
 
 function saveSession(session) {
   try {
     const history = loadHistory();
-    // Remove any existing session for same date+type
     const filtered = history.filter(s => !(s.date === session.date && s.type === session.type));
     filtered.push(session);
     filtered.sort((a,b) => a.date.localeCompare(b.date));
     localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+    localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
     return filtered;
   } catch { return loadHistory(); }
 }
@@ -92,7 +123,7 @@ function flattenHistory(sessions) {
           rows.push({
             date: s.date, session: s.type, location: s.location,
             exercise: ex.name, group: ex.group, set: i+1,
-            kg: set.kg, reps: set.reps, rpe: set.rpe, notes: set.notes,
+            kg: set.kg, reps: set.reps, rpe: ex.rpe, notes: ex.notes,
             is_machine: isMachine(ex.name),
           });
         }
@@ -301,10 +332,12 @@ export default function GymTracker() {
     prog.groups.forEach(g => {
       const list = location==="gym" ? g.gym : g.home;
       list.slice(0,g.pick).forEach(name => {
-        exercises.push({ name, group:g.name, sets:[{kg:"",reps:"",rpe:"",done:false},{kg:"",reps:"",rpe:"",done:false}], suggestion:null, suggLoading:false });
+        exercises.push({ name, group:g.name, sets:[{kg:"",reps:"",done:false},{kg:"",reps:"",done:false}], rpe:"", notes:"", suggestion:null, suggLoading:false });
       });
     });
-    setSession({ type, location, date:new Date().toISOString().split("T")[0], exercises, step:"pick", exIdx:0 });
+    const now = new Date();
+    const localDate = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
+    setSession({ type, location, date:localDate, exercises, step:"pick", exIdx:0 });
     setTab("log");
   }
 
@@ -430,13 +463,13 @@ function ExercisePicker({ session, setSession }) {
     });
     return s;
   });
+  const [date, setDate] = useState(session.date);
 
   function toggle(gi,name) {
-    const g=prog.groups[gi];
     setSel(prev=>{
       const s=new Set(prev[gi]);
-      if(s.has(name)){s.delete(name);}
-      else{if(s.size>=g.pick){const f=[...s][0];s.delete(f);}s.add(name);}
+      if(s.has(name)) s.delete(name);
+      else s.add(name);
       return {...prev,[gi]:s};
     });
   }
@@ -445,13 +478,14 @@ function ExercisePicker({ session, setSession }) {
     const exercises=[];
     prog.groups.forEach((g,gi)=>{
       [...sel[gi]].forEach(name=>{
-        exercises.push({name,group:g.name,sets:[{kg:"",reps:"",rpe:"",done:false},{kg:"",reps:"",rpe:"",done:false}],suggestion:null,suggLoading:false});
+        exercises.push({name,group:g.name,sets:[{kg:"",reps:"",done:false},{kg:"",reps:"",done:false}],rpe:"",notes:"",suggestion:null,suggLoading:false});
       });
     });
-    setSession(s=>({...s,exercises,step:"log",exIdx:0}));
+    setSession(s=>({...s,date,exercises,step:"log",exIdx:0}));
   }
 
-  const allValid=prog.groups.every((g,gi)=>sel[gi].size===g.pick);
+  // valid if each group has at least the minimum pick count
+  const allValid=prog.groups.every((g,gi)=>sel[gi].size>=g.pick);
 
   return (
     <div className="view">
@@ -461,9 +495,16 @@ function ExercisePicker({ session, setSession }) {
             <span className="sdot" style={{background:PROGRAMS[session.type].color}}/>
             <span style={{fontSize:16,fontWeight:600}}>{PROGRAMS[session.type].label}</span>
           </div>
-          <div style={{fontSize:12,color:"var(--t2)",fontWeight:500}}>{session.date} · {session.location==="gym"?"Gym":"Home"}</div>
+          <div style={{fontSize:12,color:"var(--t2)",fontWeight:500}}>{session.location==="gym"?"Gym":"Home"}</div>
         </div>
         <span className="badge b-gray">Pick exercises</span>
+      </div>
+
+      {/* Date picker */}
+      <div style={{marginBottom:16}}>
+        <p className="slabel" style={{marginTop:0}}>Session date</p>
+        <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+          style={{width:"100%",padding:"10px 12px",fontSize:14,border:"1px solid var(--border)",borderRadius:"var(--rs)",background:"var(--s2)",color:"var(--text)",fontFamily:"Inter,sans-serif"}}/>
       </div>
 
       {prog.groups.map((g,gi)=>{
@@ -471,7 +512,12 @@ function ExercisePicker({ session, setSession }) {
         const picked=sel[gi].size;
         return (
           <div key={gi} style={{marginBottom:16}}>
-            <p className="slabel">{g.name}<span className="pick-count" style={{color:picked===g.pick?"var(--green)":"var(--t2)"}}>{picked}/{g.pick}</span></p>
+            <p className="slabel" style={{marginTop:0}}>
+              {g.name}
+              <span className="pick-count" style={{color:picked>=g.pick?"var(--green)":"var(--t2)"}}>
+                {picked} selected {picked>g.pick&&<span style={{color:"var(--orange)"}}>+{picked-g.pick} extra</span>}
+              </span>
+            </p>
             <div className="pick-grid">
               {list.map(name=>(
                 <button key={name} className={`pbtn ${isMachine(name)?"mach":""} ${sel[gi].has(name)?"sel":""}`} onClick={()=>toggle(gi,name)}>
@@ -562,16 +608,17 @@ function LogView({ session, setSession, flatRows, onFinish, onStartNew }) {
     setSession(s=>({...s,exercises:s.exercises.map((e,ei)=>ei!==idx?e:{...e,sets:e.sets.map((st,sii)=>{
       if(sii!==si) return st;
       const updated={...st,[field]:val};
-      // auto-mark done when both kg and reps are filled
       if(updated.kg&&updated.reps) updated.done=true;
       return updated;
     })})}));
-    // start rest timer when reps entered (set completing)
     if(field==="reps"&&val) startTimer();
   }
 
+  function updateEx(field,val){
+    setSession(s=>({...s,exercises:s.exercises.map((e,ei)=>ei!==idx?e:{...e,[field]:val})}));
+  }
+
   const exHistory=flatRows.filter(r=>r.exercise===ex.name&&r.kg).slice(-5).reverse();
-  const allSetsDone=ex.sets.every(s=>s.done||s.kg);
 
   return (
     <div className="view">
@@ -610,27 +657,40 @@ function LogView({ session, setSession, flatRows, onFinish, onStartNew }) {
           {exHistory.map((r,i)=>(
             <div key={i} className="hist-pill">
               <span>{r.date}</span>
-              <span>{r.kg}kg × {r.reps} <span style={{color:"var(--t3)",marginLeft:4}}>RPE {r.rpe||"—"}</span></span>
+              <span>{r.kg}kg × {r.reps}{r.rpe?` · RPE ${r.rpe}`:""}</span>
             </div>
           ))}
           <div style={{marginBottom:14}}/>
         </>
       )}
 
-      <div className="sh"><span/><span>kg</span><span>reps</span><span>rpe</span><span style={{width:28}}/></div>
+      <div className="sh"><span/><span>kg</span><span>reps</span><span/></div>
       {ex.sets.map((st,si)=>(
-        <div key={si} className="sr">
+        <div key={si} className="sr" style={{gridTemplateColumns:"22px 1fr 1fr 28px"}}>
           <span className="snum">{si+1}</span>
           <input className={`sinput ${st.done?"done":""}`} type="number" inputMode="decimal" step="2.5" value={st.kg} placeholder="—" onChange={e=>updateSet(si,"kg",e.target.value)}/>
           <input className={`sinput ${st.done?"done":""}`} type="number" inputMode="numeric" min="1" max="20" value={st.reps} placeholder="—" onChange={e=>updateSet(si,"reps",e.target.value)}/>
-          <input className={`sinput ${st.done?"done":""}`} type="number" inputMode="numeric" min="1" max="10" value={st.rpe} placeholder="—" onChange={e=>updateSet(si,"rpe",e.target.value)}/>
           <div style={{width:28,display:"flex",alignItems:"center",justifyContent:"center"}}>
             {st.done&&<i className="ti ti-check" aria-hidden="true" style={{fontSize:16,color:"var(--green)"}}/>}
           </div>
         </div>
       ))}
 
-      <textarea placeholder="Notes…" value={ex.sets[0].notes||""} onChange={e=>updateSet(0,"notes",e.target.value)} style={{marginTop:10}}/>
+      {/* RPE per exercise */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginTop:12,marginBottom:8}}>
+        <span style={{fontSize:11,fontWeight:600,color:"var(--t2)",textTransform:"uppercase",letterSpacing:".06em",whiteSpace:"nowrap"}}>RPE (exercise)</span>
+        <div style={{display:"flex",gap:5,flex:1,flexWrap:"wrap"}}>
+          {[6,7,8,9,10].map(n=>(
+            <button key={n} onClick={()=>updateEx("rpe",String(n))}
+              style={{flex:1,minWidth:36,padding:"7px 4px",fontSize:13,fontWeight:600,border:`1px solid ${ex.rpe===String(n)?"var(--text)":"var(--border)"}`,borderRadius:"var(--rs)",background:ex.rpe===String(n)?"var(--text)":"var(--s2)",color:ex.rpe===String(n)?"var(--bg)":"var(--t2)",cursor:"pointer",transition:"all .15s"}}>
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{fontSize:10,color:"var(--t3)",marginBottom:10}}>6 = easy · 8 = 2 reps left · 10 = failure</div>
+
+      <textarea placeholder="Notes…" value={ex.notes||""} onChange={e=>updateEx("notes",e.target.value)}/>
 
       <div className="npair">
         <button disabled={idx===0} onClick={()=>setSession(s=>({...s,exIdx:idx-1}))}>
