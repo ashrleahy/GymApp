@@ -1,5 +1,6 @@
-import { kv } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
 
+const redis = Redis.fromEnv();
 const KV_KEY = 'gym_sessions';
 
 export default async function handler(req, res) {
@@ -11,10 +12,10 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     try {
-      const sessions = await kv.get(KV_KEY);
+      const sessions = await redis.get(KV_KEY);
       return res.status(200).json({ sessions: sessions || [] });
     } catch (err) {
-      console.error('KV read error:', err);
+      console.error('Redis read error:', err);
       return res.status(500).json({ error: 'Failed to read sessions' });
     }
   }
@@ -23,10 +24,10 @@ export default async function handler(req, res) {
     try {
       const { sessions } = req.body;
       if (!Array.isArray(sessions)) return res.status(400).json({ error: 'Invalid sessions data' });
-      await kv.set(KV_KEY, sessions);
+      await redis.set(KV_KEY, sessions);
       return res.status(200).json({ ok: true });
     } catch (err) {
-      console.error('KV write error:', err);
+      console.error('Redis write error:', err);
       return res.status(500).json({ error: 'Failed to write sessions' });
     }
   }
