@@ -77,7 +77,7 @@ function loadLocalHistory() {
 
 async function loadHistory() {
   try {
-    const res = await fetch('/api/sessions');
+    const res = await fetch('/api/handler?route=sessions');
     if (!res.ok) return loadLocalHistory();
     const { sessions } = await res.json();
     return (sessions || []).map(migrateSession);
@@ -87,8 +87,8 @@ async function loadHistory() {
 async function saveHistory(sessions) {
   try { localStorage.setItem('gymtracker_sessions', JSON.stringify(sessions)); } catch {}
   try {
-    await fetch('/api/sessions', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ sessions }) });
-  } catch (err) { console.error('KV save failed:', err); }
+    await fetch('/api/handler?route=sessions', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ sessions }) });
+  } catch (err) { console.error('Save failed:', err); }
 }
 
 async function saveSession(session, allSessions) {
@@ -146,7 +146,7 @@ function getWeekSessions(sessions) {
 
 // ─── Claude API — server-side proxy ──────────────────────────────────────────
 async function callClaude(user, system, maxTokens=400) {
-  const res = await fetch('/api/ai', {
+  const res = await fetch('/api/handler?route=ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages:[{role:'user',content:user}], system, maxTokens }),
