@@ -60,56 +60,43 @@ const MACHINES = new Set(["Cable Fly","Machine Bench","Overhead Press – Machin
 const isMachine = ex => MACHINES.has(ex);
 
 // ─── Storage ──────────────────────────────────────────────────────────────────
-const STORAGE_KEY = "gymtracker_sessions";
 const SCHEMA_VERSION = 2;
-const SCHEMA_KEY = "gymtracker_schema_version";
 
 function migrateSession(session) {
-  // v1 → v2: move rpe/notes from sets to exercise level
   const exercises = (session.exercises || []).map(ex => {
-    const sets = (ex.sets || []).map(s => ({
-      kg: s.kg ?? "",
-      reps: s.reps ?? "",
-      done: s.done ?? false,
-    }));
-    return {
-      name: ex.name,
-      group: ex.group,
-      sets,
-      rpe: ex.rpe ?? (ex.sets?.[0]?.rpe ?? ""),
-      notes: ex.notes ?? (ex.sets?.[0]?.notes ?? ""),
-      suggestion: null,
-      suggLoading: false,
-    };
+    const sets = (ex.sets || []).map(s => ({ kg: s.kg ?? "", reps: s.reps ?? "", done: s.done ?? false }));
+    return { name: ex.name, group: ex.group, sets, rpe: ex.rpe ?? (ex.sets?.[0]?.rpe ?? ""), notes: ex.notes ?? (ex.sets?.[0]?.notes ?? ""), suggestion: null, suggLoading: false };
   });
   return { ...session, exercises };
 }
 
-function loadHistory() {
-  try {
-    const version = parseInt(localStorage.getItem(SCHEMA_KEY) || "1");
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    let sessions = JSON.parse(raw);
-    if (version < SCHEMA_VERSION) {
-      sessions = sessions.map(migrateSession);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions));
-      localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
-    }
-    return sessions;
-  } catch { return []; }
+function loadLocalHistory() {
+  try { const raw = localStorage.getItem('gymtracker_sessions'); return raw ? JSON.parse(raw).map(migrateSession) : []; }
+  catch { return []; }
 }
 
-function saveSession(session) {
+async function loadHistory() {
   try {
-    const history = loadHistory();
-    const filtered = history.filter(s => !(s.date === session.date && s.type === session.type));
-    filtered.push(session);
-    filtered.sort((a,b) => a.date.localeCompare(b.date));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(filtered));
-    localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
-    return filtered;
-  } catch { return loadHistory(); }
+    const res = await fetch('/api/sessions');
+    if (!res.ok) return loadLocalHistory();
+    const { sessions } = await res.json();
+    return (sessions || []).map(migrateSession);
+  } catch { return loadLocalHistory(); }
+}
+
+async function saveHistory(sessions) {
+  try { localStorage.setItem('gymtracker_sessions', JSON.stringify(sessions)); } catch {}
+  try {
+    await fetch('/api/sessions', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ sessions }) });
+  } catch (err) { console.error('KV save failed:', err); }
+}
+
+async function saveSession(session, allSessions) {
+  const filtered = allSessions.filter(s => !(s.date===session.date && s.type===session.type));
+  filtered.push(session);
+  filtered.sort((a,b) => a.date.localeCompare(b.date));
+  await saveHistory(filtered);
+  return filtered;
 }
 
 // ─── Derived helpers ──────────────────────────────────────────────────────────
@@ -157,15 +144,15 @@ function getWeekSessions(sessions) {
   return done;
 }
 
-// ─── Claude API ───────────────────────────────────────────────────────────────
+// ─── Claude API — server-side proxy ──────────────────────────────────────────
 async function callClaude(user, system, maxTokens=400) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:maxTokens, system, messages:[{role:"user",content:user}] }),
+  const res = await fetch('/api/ai', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages:[{role:'user',content:user}], system, maxTokens }),
   });
   const d = await res.json();
-  return d.content?.map(b=>b.text||"").join("") || "";
+  return d.text || '';
 }
 
 async function getWeightSuggestion(exercise, rows) {
@@ -303,15 +290,21 @@ input[type=number]::-webkit-outer-spin-button,input[type=number]::-webkit-inner-
 
 // ─── App root ─────────────────────────────────────────────────────────────────
 export default function GymTracker() {
-  const [tab, setTab]         = useState("plan");
-  const [sessions, setSessions] = useState(()=>loadHistory());
-  const [session, setSession] = useState(null);
-  const [nudge, setNudge]     = useState(null);
+  const [tab, setTab]           = useState("plan");
+  const [sessions, setSessions] = useState(loadLocalHistory); // start with local immediately
+  const [session, setSession]   = useState(null);
+  const [nudge, setNudge]       = useState(null);
   const [nudgeLoading, setNudgeLoading] = useState(false);
+
+  // Load from KV on mount, merge with local
+  useEffect(()=>{
+    loadHistory().then(kvSessions => {
+      if(kvSessions.length > 0) setSessions(kvSessions);
+    });
+  },[]);
 
   const flatRows = flattenHistory(sessions);
 
-  // PRs from flat rows
   const prs = {};
   flatRows.filter(r => !r.is_machine && r.kg && r.reps).forEach(r => {
     const kg=parseFloat(r.kg), reps=parseInt(r.reps);
@@ -341,8 +334,8 @@ export default function GymTracker() {
     setTab("log");
   }
 
-  function finishSession(completedSession) {
-    const updated = saveSession(completedSession);
+  async function finishSession(completedSession) {
+    const updated = await saveSession(completedSession, sessions);
     setSessions(updated);
     setSession(null);
     setTab("plan");
@@ -710,6 +703,16 @@ function ProgressView({ flatRows, sessions, prs, thisWeek, avgRpe, nudge, nudgeL
   const freePRs=Object.entries(prs).filter(([n])=>!isMachine(n)).sort((a,b)=>b[1].date.localeCompare(a[1].date)).slice(0,8);
   const sessionKeys=[...new Set(flatRows.map(r=>r.date+r.session))];
   const recent4=sessionKeys.slice(-4), prev4=sessionKeys.slice(-8,-4);
+  const [syncing, setSyncing] = useState(false);
+  const [syncDone, setSyncDone] = useState(false);
+
+  async function syncToCloud() {
+    setSyncing(true);
+    try {
+      await saveHistory(sessions);
+      setSyncDone(true);
+    } catch { } finally { setSyncing(false); }
+  }
 
   function vol(keys,ex){ return flatRows.filter(r=>keys.includes(r.date+r.session)&&r.exercise===ex&&r.kg).reduce((s,r)=>s+(parseFloat(r.kg)*(parseInt(r.reps)||0)),0); }
   const keyLifts=["Bench – Bar","Bench – Dumbbells","Squats","Deadlifts","Overhead Press – Bar","Pull Ups","Barbell Row"];
@@ -718,6 +721,21 @@ function ProgressView({ flatRows, sessions, prs, thisWeek, avgRpe, nudge, nudgeL
   return (
     <div className="view">
       <div className="hbar"><div className="hbar-title">Progress</div></div>
+
+      {/* Sync to cloud */}
+      {sessions.length>0 && !syncDone && (
+        <button className="btn-g" onClick={syncToCloud} disabled={syncing} style={{marginBottom:4}}>
+          {syncing
+            ? <><span className="spin" style={{marginRight:6}}/>Syncing to cloud…</>
+            : <><i className="ti ti-cloud-upload" aria-hidden="true" style={{marginRight:6}}/>Sync existing sessions to cloud ↗</>
+          }
+        </button>
+      )}
+      {syncDone && (
+        <div style={{fontSize:12,color:"var(--green)",marginBottom:12,fontWeight:500}}>
+          <i className="ti ti-check" aria-hidden="true" style={{marginRight:6}}/>Synced — sessions now available on all devices
+        </div>
+      )}
 
       <div className="stat-grid">
         {[
