@@ -170,7 +170,7 @@ async function getWeightSuggestion(exercise, rows) {
 }
 
 async function getProgramNudge(rows) {
-  if (rows.length < 15) return null;
+  if (rows.length < 5) return null;
   const freeRows = rows.filter(r=>!r.is_machine&&r.kg).slice(-80);
   const summary = freeRows.map(r=>`${r.date} [${r.session}] ${r.exercise}: ${r.kg}kg×${r.reps} RPE${r.rpe||"?"}`).join("\n");
   return callClaude(
@@ -756,7 +756,7 @@ function ProgressView({ flatRows, sessions, prs, thisWeek, avgRpe, nudge, nudgeL
         ?<div className="ai-nudge"><div className="ai-label"><i className="ti ti-sparkles" aria-hidden="true" style={{fontSize:11}}/>Coach feedback</div>{nudge}</div>
         :<button className="btn-g" onClick={onNudge} disabled={nudgeLoading||flatRows.length<15}>
           {nudgeLoading?<><span className="spin" style={{marginRight:6}}/>Analysing…</>
-           :flatRows.length<15?"Log more sessions to unlock AI review"
+           :flatRows.length<5?"Log at least one full session to unlock AI review"
            :<><i className="ti ti-sparkles" aria-hidden="true" style={{marginRight:6}}/>Get AI programme feedback ↗</>}
          </button>
       }
