@@ -8,7 +8,7 @@ Post-session logger for an upper/lower split across Richmond, Edwardstown and Ho
 - **Coach check:** after each save, Claude reviews the rule's next targets. Its notes show on the next session, with a one-tap "Use X kg".
 - **Trends:** estimated 1RM per free-weight lift (machines are excluded).
 
-Env: `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL` (default `claude-sonnet-4-5`).
+Env: `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` (or Vercel's `KV_REST_API_URL`, `KV_REST_API_TOKEN`), `ANTHROPIC_API_KEY`, optional `ANTHROPIC_MODEL` (default `claude-sonnet-4-5`).
 Data lives in Redis key `gymapp:v3`. The old app's `gym_sessions` key is untouched and can be imported from Programmes → Import.
 
 `npm test` runs the progression tests.
