@@ -27,11 +27,20 @@ export async function saveState(state) {
   } catch { return false }
 }
 
-// Best-effort import of logs from the previous app (Redis key gym_sessions).
+// Best-effort import of logs from the previous app: Redis key gym_sessions,
+// plus the copy the old app cached in this browser (localStorage gymtracker_sessions).
 export async function importLegacy(state) {
-  const res = await fetch('/api/state?legacy=1', { cache: 'no-store' })
-  const { data } = await res.json()
-  if (!Array.isArray(data) || !data.length) return { state, count: 0 }
+  let data = []
+  try {
+    const res = await fetch('/api/state?legacy=1', { cache: 'no-store' })
+    if (res.ok) { const j = await res.json(); if (Array.isArray(j.data)) data = j.data }
+  } catch {}
+  try {
+    const raw = localStorage.getItem('gymtracker_sessions')
+    const local = raw ? JSON.parse(raw) : null
+    if (Array.isArray(local)) data = [...data, ...local]
+  } catch {}
+  if (!data.length) return { state, count: 0 }
   const home = state.locations.find(l => l.id === 'home' || /home/i.test(l.name)) || state.locations[0]
   const gym = state.locations.find(l => l !== home) || state.locations[0]
   const have = new Set(state.logs.map(l => `${l.date}|${l.day}|${l.locId}`))
@@ -42,6 +51,7 @@ export async function importLegacy(state) {
     const day = s.type === 'legs' ? 'legs' : 'upper'
     const k = `${s.date}|${day}|${locId}`
     if (have.has(k)) continue
+    have.add(k)
     const entries = (s.exercises || []).map(ex => ({
       name: ex.name,
       sets: (ex.sets || []).filter(x => x.kg !== '' && x.reps !== '' && x.reps != null)
