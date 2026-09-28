@@ -11,7 +11,7 @@ export const CATALOG = {
   // bodyweight (+kg added)
   'Dips': 'bw', 'Pull Ups': 'bw',
   // machine / cable
-  'Leg Press': 'machine', 'Leg Extension': 'machine', 'Hamstring Curls': 'machine', 'Calf Raises': 'machine',
+  'Leg Press': 'machine', 'Leg Extension': 'machine', 'Hamstring Curls': 'machine',
   'Cable Lateral Raise': 'machine', 'Rope Push Down': 'machine', 'Machine Fly': 'machine',
   'Machine Press': 'machine', 'Supported Row': 'machine', 'Cable Biceps': 'machine',
   // band
