@@ -29,10 +29,12 @@ export function e1rm(sets, extra = 0) {
 }
 
 // Double progression for N × 5–8 (N = sets for that exercise, default 2).
-// All sets at 8+  -> add one increment, aim 5,5.
-// Any set under 5 -> drop one increment, aim 6,6.
+// All sets at 8+  -> add one increment, aim 5s.
+// Any set under 5 -> stay and build reps; only drop one increment if the
+//                    previous session at the same weight was also under 5
+//                    (so a big dumbbell/cable jump doesn't bounce you back).
 // Otherwise       -> same kg, aim +1 rep per set (capped at 8).
-export function nextTarget(last, inc, sets = 2) {
+export function nextTarget(last, inc, sets = 2, prev = null) {
   const kg = Math.max(...last.sets.map(s => Number(s.kg) || 0))
   const top = last.sets.filter(s => (Number(s.kg) || 0) === kg)
   const reps = top.map(s => Number(s.reps) || 0)
@@ -40,10 +42,12 @@ export function nextTarget(last, inc, sets = 2) {
   if (reps.every(r => r >= REP_MAX)) {
     return { kg: round(kg + inc), reps: Array(n).fill(REP_MIN), rule: 'up' }
   }
-  if (reps.some(r => r < REP_MIN)) {
+  const topKg = e => Math.max(...e.sets.map(s => Number(s.kg) || 0))
+  const under = e => e.sets.filter(s => (Number(s.kg) || 0) === topKg(e)).some(s => (Number(s.reps) || 0) < REP_MIN)
+  if (reps.some(r => r < REP_MIN) && prev && topKg(prev) === kg && under(prev)) {
     return { kg: round(Math.max(0, kg - inc)), reps: Array(n).fill(6), rule: 'down' }
   }
-  const aim = Array.from({ length: n }, (_, i) => Math.min(REP_MAX, (reps[i] ?? Math.min(...reps)) + 1))
+  const aim = Array.from({ length: n }, (_, i) => Math.min(REP_MAX, Math.max(REP_MIN, (reps[i] ?? Math.min(...reps)) + 1)))
   return { kg, reps: aim, rule: 'hold' }
 }
 
@@ -67,7 +71,7 @@ export function targetFor(state, item, locId) {
     }
     return { kg: null, reps: Array(n).fill(null), rule: 'new', kind, inc, last: null, stalled: false }
   }
-  return { ...nextTarget(last, inc, n), kind, inc, last, stalled: isStalled(hist) }
+  return { ...nextTarget(last, inc, n, hist[hist.length - 2] || null), kind, inc, last, stalled: isStalled(hist) }
 }
 
 // Trend series for free weights only (machines vary between gyms).

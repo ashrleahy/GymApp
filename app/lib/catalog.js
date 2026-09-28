@@ -13,7 +13,7 @@ export const CATALOG = {
   // machine / cable
   'Leg Press': 'machine', 'Leg Extension': 'machine', 'Hamstring Curls': 'machine',
   'Cable Lateral Raise': 'machine', 'Rope Push Down': 'machine', 'Machine Fly': 'machine',
-  'Machine Press': 'machine', 'Supported Row': 'machine', 'Cable Biceps': 'machine',
+  'Machine Press': 'machine', 'Supported Row': 'machine', 'Cable Biceps': 'machine', 'Face Pulls': 'machine',
   // band
   'Band Push Down': 'band',
 }
@@ -32,7 +32,7 @@ const P = (...names) => names.map(n => typeof n === 'string' ? { name: n } : n)
 const GYM = {
   legs: P('Squats', 'Deadlifts', 'Leg Press', 'Leg Extension', 'Hamstring Curls', 'Calf Raises'),
   upper: P('Incline Dumbbell Bench', 'Incline Dumbbell Curls', 'Cable Lateral Raise', 'Dumbbell Overhead Press', 'Dips',
-    'Rope Push Down', 'Machine Fly', 'Machine Press', 'Barbell Curl', 'Pull Ups', 'Supported Row'),
+    'Rope Push Down', 'Machine Fly', 'Machine Press', 'Barbell Curl', 'Pull Ups', 'Supported Row', 'Face Pulls'),
 }
 const clone = o => JSON.parse(JSON.stringify(o))
 

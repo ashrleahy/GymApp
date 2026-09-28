@@ -5,7 +5,9 @@ import { weekStart } from '../app/lib/dates.js'
 
 const S = (kg, ...reps) => reps.map(r => ({ kg, reps: r }))
 test('up when all sets hit 8', () => assert.deepEqual(nextTarget({ sets: S(80, 8, 8) }, 2.5), { kg: 82.5, reps: [5, 5], rule: 'up' }))
-test('down when a set under 5', () => assert.deepEqual(nextTarget({ sets: S(80, 6, 4) }, 2.5), { kg: 77.5, reps: [6, 6], rule: 'down' }))
+test('under 5 once holds and builds reps', () => assert.deepEqual(nextTarget({ sets: S(15, 5, 4) }, 2.5), { kg: 15, reps: [6, 5], rule: 'hold' }))
+test('under 5 twice at same weight drops', () => assert.deepEqual(nextTarget({ sets: S(15, 5, 4) }, 2.5, 2, { sets: S(15, 4, 4) }), { kg: 12.5, reps: [6, 6], rule: 'down' }))
+test('under 5 after a jump from lighter weight holds', () => assert.equal(nextTarget({ sets: S(15, 4, 4) }, 2.5, 2, { sets: S(12.5, 8, 8) }).rule, 'hold'))
 test('hold adds a rep capped at 8', () => assert.deepEqual(nextTarget({ sets: S(80, 8, 6) }, 2.5), { kg: 80, reps: [8, 7], rule: 'hold' }))
 test('stall detection', () => {
   assert.equal(isStalled([{ sets: S(80, 6, 6) }, { sets: S(80, 6, 5) }, { sets: S(80, 6, 6) }]), true)
