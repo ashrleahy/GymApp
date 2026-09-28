@@ -1,5 +1,5 @@
-import GymTracker from './components/GymTracker'
+import App from './components/App.jsx'
 
 export default function Page() {
-  return <GymTracker />
+  return <App />
 }
