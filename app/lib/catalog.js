@@ -3,10 +3,10 @@
 // db, machine and band targets are kept per location.
 export const CATALOG = {
   // barbell
-  'Squats': 'bar', 'Deadlifts': 'bar', 'Incline Barbell Bench': 'bar', 'Barbell Overhead Press': 'bar',
+  'Squats': 'bar', 'Deadlifts': 'bar', 'Calf Raises': 'bar', 'Incline Barbell Bench': 'bar', 'Barbell Overhead Press': 'bar',
   'Barbell Curl': 'bar', 'Bent Over Rows': 'bar',
   // dumbbell (per hand)
-  'Incline Dumbbell Bench': 'db', 'Incline Dumbbell': 'db', 'Dumbbell Overhead Press': 'db',
+  'Incline Dumbbell Bench': 'db', 'Incline Dumbbell Curls': 'db', 'Dumbbell Overhead Press': 'db',
   'Dumbbell Lateral Raise': 'db', 'Lunges': 'db', 'Goblet Squats': 'db',
   // bodyweight (+kg added)
   'Dips': 'bw', 'Pull Ups': 'bw',
@@ -31,7 +31,7 @@ export const dayById = id => DAYS.find(d => d.id === id)
 const P = (...names) => names.map(n => typeof n === 'string' ? { name: n } : n)
 const GYM = {
   legs: P('Squats', 'Deadlifts', 'Leg Press', 'Leg Extension', 'Hamstring Curls', 'Calf Raises'),
-  upper: P('Incline Dumbbell Bench', 'Incline Dumbbell', 'Cable Lateral Raise', 'Dumbbell Overhead Press', 'Dips',
+  upper: P('Incline Dumbbell Bench', 'Incline Dumbbell Curls', 'Cable Lateral Raise', 'Dumbbell Overhead Press', 'Dips',
     'Rope Push Down', 'Machine Fly', 'Machine Press', 'Barbell Curl', 'Pull Ups', 'Supported Row'),
 }
 const clone = o => JSON.parse(JSON.stringify(o))
@@ -47,7 +47,7 @@ export function seedState() {
       {
         id: 'home', name: 'Home', program: {
           legs: P({ name: 'Squats', sets: 3 }, { name: 'Deadlifts', sets: 3 }, 'Lunges', 'Goblet Squats', 'Calf Raises'),
-          upper: P({ name: 'Incline Barbell Bench', sets: 4 }, 'Incline Dumbbell', 'Dumbbell Lateral Raise', 'Barbell Overhead Press',
+          upper: P({ name: 'Incline Barbell Bench', sets: 4 }, 'Incline Dumbbell Curls', 'Dumbbell Lateral Raise', 'Barbell Overhead Press',
             'Dips', 'Band Push Down', 'Barbell Curl', 'Pull Ups', 'Bent Over Rows'),
         },
       },
